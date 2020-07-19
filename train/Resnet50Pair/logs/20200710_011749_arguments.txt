@@ -1,0 +1,15 @@
+S1LMDBPth: /Users/mrbank/Courses/MasterThesis/CrossModalityHashing/crossSource/serbiaS1Reduced.lmdb
+S2LMDBPth: /Users/mrbank/Courses/MasterThesis/CrossModalityHashing/crossSource/serbiaS2Reduced.lmdb
+batch_size: 200
+epochs: 500
+k: 20
+lr: 0.001
+resume: None
+num_workers: 2
+bits: 16
+BigEarthNet19: False
+big1000: True
+serbia: True
+train_csvS1: /Users/mrbank/Courses/MasterThesis/CrossModalityHashing/crossSource/serbiaS1ReducedTrain.csv
+val_csvS1: /Users/mrbank/Courses/MasterThesis/CrossModalityHashing/crossSource/serbiaS1ReducedVal.csv
+test_csvS1: /Users/mrbank/Courses/MasterThesis/CrossModalityHashing/crossSource/serbiaS1ReducedTest.csv
