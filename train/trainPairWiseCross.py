@@ -12,6 +12,7 @@ import numpy as np
 from datetime import datetime
 from tqdm import tqdm
 import shutil
+import time
 
 import argparse
 from tensorboardX import SummaryWriter
@@ -30,7 +31,7 @@ from utils.ResNet import ResNet50_S1, ResNet50_S2
 
 from utils.dataGenBigEarth import dataGenBigEarthLMDB, ToTensor, Normalize, ConcatDataset
 
-from utils.metrics import MetricTracker, get_k_hamming_neighbours, get_mAP, Recall_score, F1_score, F2_score, Hamming_loss, Subset_accuracy, \
+from utils.metrics import MetricTracker, get_k_hamming_neighbours, get_mAP,timer, Recall_score, F1_score, F2_score, Hamming_loss, Subset_accuracy, \
     Accuracy_score, One_error, Coverage_error, Ranking_loss, LabelAvgPrec_score
 
 
@@ -99,10 +100,30 @@ def save_checkpoint(state, is_best, name):
 
 
 
+def get_triplets(train_labels):
+    indices = get_k_hamming_neighbours(train_labels,train_labels)
+    
+    anchors = indices[:,0]
+    anchors = anchors.reshape(1,-1)
+    
+    positives = indices[:,1]
+    positives = positives.reshape(1,-1)
+    
+    negatives = indices[:,-1]
+    negatives = negatives.reshape(1,-1)
+    
+    triplets = torch.cat((anchors,positives,negatives))
+    
+    return triplets
+    
+
+
+
 def main():
     global args
 
     sv_name = datetime.strftime(datetime.now(), '%Y%m%d_%H%M%S')
+    sv_name = sv_name + '_' + str(args.bits) + '_' + str(args.k)
     print('saving file name is ', sv_name)
 
     write_arguments_to_file(args, os.path.join(logs_dir, sv_name+'_arguments.txt'))
@@ -313,35 +334,20 @@ def main():
 
     toWrite = False
  
+    start = time.time()
     for epoch in range(start_epoch, args.epochs):
 
         print('Epoch {}/{}'.format(epoch, args.epochs - 1))
         print('-' * 10)
 
 
-        generatedCodesS1,generatedCodesS2, trainedLabels, name_trainS1, name_trainS2 = train(train_data_loader, modelS1,modelS2, optimizerS1,optimizerS2, epoch, use_cuda, train_writer,gpuDisabled,lossFunc)
+        train(train_data_loader, modelS1,modelS2, optimizerS1,optimizerS2, epoch, use_cuda, train_writer,gpuDisabled,lossFunc)
+                        
+        mAP,val_S1codes,val_S2codes,label_val,name_valS1,name_valS2 = val(val_data_loader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer,gpuDisabled)
         
-        # To binarize s1 and s2 codes
-        generatedCodesS1 = torch.stack(generatedCodesS1).reshape(len(generatedCodesS1),args.bits)
-        generatedCodesS2 = torch.stack(generatedCodesS2).reshape(len(generatedCodesS2),args.bits)
-        
-        generatedCodesS1 = torch.sigmoid(generatedCodesS1)
-        generatedCodesS2 = torch.sigmoid(generatedCodesS2)
-        
-        
-        if gpuDisabled:
-            t = torch.Tensor([0.5])
-        else:
-            t = torch.cuda.FloatTensor(1).fill_(0.5)
-
-            
-        generatedCodesS1 = (generatedCodesS1 >= t).float()
-        generatedCodesS2 = (generatedCodesS2 >= t).float()
-                
-        mAP,val_S1codes,val_S2codes,label_val,name_valS1,name_valS2 = val(val_data_loader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer,generatedCodesS1,generatedCodesS2, trainedLabels, name_trainS1,name_trainS2,gpuDisabled)
         val_S1codes = torch.stack(val_S1codes).reshape(len(val_S1codes),args.bits)
         val_S2codes = torch.stack(val_S2codes).reshape(len(val_S2codes),args.bits)
-
+        label_val = torch.stack(label_val,0)
 
 
 
@@ -360,13 +366,13 @@ def main():
             trainedS2FileNamesToWriteFile = []  
             
             
-            generatedS1CodesToWriteFile = torch.cat((generatedCodesS1 , val_S1codes))
-            generatedS2CodesToWriteFile = torch.cat((generatedCodesS2 , val_S2codes))
+            generatedS1CodesToWriteFile =  val_S1codes
+            generatedS2CodesToWriteFile = val_S2codes
             
-            trainedLabelsToWriteFile = trainedLabels + label_val
+            trainedLabelsToWriteFile = label_val
             
-            trainedS1FileNamesToWriteFile = name_trainS1 + name_valS1
-            trainedS2FileNamesToWriteFile = name_trainS2 + name_valS2
+            trainedS1FileNamesToWriteFile = name_valS1
+            trainedS2FileNamesToWriteFile = name_valS2
 
             epochToWrite = epoch
             stateS1DictToWrite = modelS1.state_dict()
@@ -378,7 +384,9 @@ def main():
             bestMapToWrite = best_acc
             toWrite = True
 
-
+    end = time.time()
+    print('Training and Validation Time has been elapsed')
+    print(timer(start,end))
     
     
     if toWrite :
@@ -448,8 +456,11 @@ def train(trainloader, modelS1,modelS2, optimizerS1,optimizerS2, epoch, use_cuda
             polars2 = torch.cat((dataS1["polarVH"][halfNumSample:], dataS1["polarVV"][halfNumSample:]), dim=1).to(torch.device("cpu"))
             labels2 = dataS2["label"][halfNumSample:].to(torch.device("cpu")) 
             
+            labels = torch.cat((labels1,labels2)).to(torch.device('cpu'))
+            
             onesTensor = torch.ones(halfNumSample)
             
+        
         else:            
             bands1 = torch.cat((dataS2["bands10"][:halfNumSample], dataS2["bands20"][:halfNumSample],dataS2["bands60"][:halfNumSample]), dim=1).to(torch.device("cuda"))
             polars1 = torch.cat((dataS1["polarVH"][:halfNumSample], dataS1["polarVV"][:halfNumSample]), dim=1).to(torch.device("cuda"))
@@ -458,6 +469,8 @@ def train(trainloader, modelS1,modelS2, optimizerS1,optimizerS2, epoch, use_cuda
             bands2 = torch.cat((dataS2["bands10"][halfNumSample:], dataS2["bands20"][halfNumSample:],dataS2["bands60"][halfNumSample:]), dim=1).to(torch.device("cuda"))
             polars2 = torch.cat((dataS1["polarVH"][halfNumSample:], dataS1["polarVV"][halfNumSample:]), dim=1).to(torch.device("cuda"))
             labels2 = dataS2["label"][halfNumSample:].to(torch.device("cuda")) 
+            
+            labels = torch.cat((labels1,labels2)).to(torch.device('cuda'))
             
             onesTensor = torch.cuda.FloatTensor(halfNumSample).fill_(0)
         
@@ -511,7 +524,7 @@ def train(trainloader, modelS1,modelS2, optimizerS1,optimizerS2, epoch, use_cuda
         generated_S1codes += list(logitsS1_1) + list(logitsS1_2)
         generated_S2codes += list(logitsS2_1) + list(logitsS2_2)
         
-        label_train += list(dataS1["label"])
+        label_train += list(labels)
         
         name_trainS1 += list(dataS1['patchName'])
         name_trainS2 += list(dataS2['patchName'])
@@ -522,10 +535,9 @@ def train(trainloader, modelS1,modelS2, optimizerS1,optimizerS2, epoch, use_cuda
     print('Train loss: {:.6f}'.format(lossTracker.avg))
     
     
-    return (generated_S1codes,generated_S2codes,label_train,name_trainS1,name_trainS2)
+    
 
-
-def val(valloader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer,generatedCodesS1,generatedCodesS2, trainedLabels,name_trainS1,name_trainS2,gpuDisabled):
+def val(valloader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer, gpuDisabled):
 
 
     modelS1.eval()
@@ -571,8 +583,8 @@ def val(valloader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer,generate
             else:
                 t = torch.cuda.FloatTensor(1).fill_(0.5)
         
-            binaryS1 = (binaryS1 > t).float()
-            binaryS2 = (binaryS2 > t).float()
+            binaryS1 = (binaryS1 >= t).float()
+            binaryS2 = (binaryS2 >= t).float()
 
 
 
@@ -584,25 +596,50 @@ def val(valloader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer,generate
             name_valS1 += list(dataS1['patchName'])
             name_valS2 += list(dataS2['patchName'])
             
-            #S1 to S1
-            neighboursIndices = get_k_hamming_neighbours(generatedCodesS1, binaryS1)  
-            mapPerBatch = get_mAP(neighboursIndices,args.k,trainedLabels,list(labels))
-            mapS1toS1 += mapPerBatch
+    
+    
+    
+    
+    valCodesS1 = torch.stack(predicted_S1codes).reshape(len(predicted_S1codes),args.bits)
+    valCodesS2 = torch.stack(predicted_S2codes).reshape(len(predicted_S2codes),args.bits)
+    valLabels = torch.stack(label_val).reshape(len(label_val),len(label_val[0]))
+    
+    for i in range(len(valCodesS1)):
+        
+        queryCodeS1 = valCodesS1[i].reshape(1,-1)
+        queryCodeS2 = valCodesS2[i].reshape(1,-1)
+        queryLabel = label_val[i]
+                
+        databaseS1 = valCodesS1
+        databaseS2 = valCodesS2
+        databaseLabels = valLabels
+        
+        databaseS1 = torch.cat([databaseS1[0:i], databaseS1[i+1:]])
+        databaseS2 = torch.cat([databaseS2[0:i], databaseS2[i+1:]])
+        databaseLabels = torch.cat([databaseLabels[0:i], databaseLabels[i+1:]])
+        
+        #S1 to S1
+        neighboursIndices = get_k_hamming_neighbours(databaseS1, queryCodeS1)  
+        mapPerBatch = get_mAP(neighboursIndices,args.k,databaseLabels,queryLabel)
+        mapS1toS1 += mapPerBatch
+        
+        #S1 to S2
+        neighboursIndices = get_k_hamming_neighbours(databaseS2,queryCodeS1)  
+        mapPerBatch = get_mAP(neighboursIndices,args.k,databaseLabels,queryLabel)
+        mapS1toS2 += mapPerBatch
             
-            #S1 to S2
-            neighboursIndices = get_k_hamming_neighbours(generatedCodesS2,binaryS1)  
-            mapPerBatch = get_mAP(neighboursIndices,args.k,trainedLabels,list(labels))
-            mapS1toS2 += mapPerBatch
-            
-            #S2 to S1
-            neighboursIndices = get_k_hamming_neighbours(generatedCodesS1,binaryS2)  
-            mapPerBatch = get_mAP(neighboursIndices,args.k,trainedLabels,list(labels))
-            mapS2toS1 += mapPerBatch
+        #S2 to S1
+        neighboursIndices = get_k_hamming_neighbours(databaseS1,queryCodeS2)  
+        mapPerBatch = get_mAP(neighboursIndices,args.k,databaseLabels,queryLabel)
+        mapS2toS1 += mapPerBatch
                   
-            #S2 to S2
-            neighboursIndices = get_k_hamming_neighbours(generatedCodesS2, binaryS2)  
-            mapPerBatch = get_mAP(neighboursIndices,args.k,trainedLabels,list(labels))
-            mapS2toS2 += mapPerBatch
+        #S2 to S2
+        neighboursIndices = get_k_hamming_neighbours(databaseS2, queryCodeS2)  
+        mapPerBatch = get_mAP(neighboursIndices,args.k,databaseLabels,queryLabel)
+        mapS2toS2 += mapPerBatch
+        
+        
+
     
     #print('MapS1toS1: ',mapS1toS1)
     #print('len: ',totalSize)
