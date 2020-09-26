@@ -65,12 +65,10 @@ parser.add_argument('--val_csvS1', metavar='CSV_PTH',
 parser.add_argument('--test_csvS1', metavar='CSV_PTH',
                         help='path to the csv file of test patches')
 
-
-
+parser.add_argument('-loss', '--lossFunction', type=str, dest = 'lossFunc', help="which loss function will be used?", choices=['MSELoss', 'TripletLoss'], default='MSELoss')
 
 
 args = parser.parse_args()
-
 
 
 checkpoint_dir = os.path.join('./', 'Resnet50Pair', 'checkpoints')
@@ -115,6 +113,12 @@ def get_triplets(train_labels):
     triplets = torch.cat((anchors,positives,negatives))
     
     return triplets
+
+def triplet_loss(a, p, n, margin=0.2) : 
+    d = nn.PairwiseDistance(p=2)
+    distance = d(a, p) - d(a, n) + margin 
+    loss = torch.mean(torch.max(distance, torch.zeros_like(distance))) 
+    return loss
     
 
 
@@ -123,7 +127,7 @@ def main():
     global args
 
     sv_name = datetime.strftime(datetime.now(), '%Y%m%d_%H%M%S')
-    sv_name = sv_name + '_' + str(args.bits) + '_' + str(args.k)
+    sv_name = sv_name + '_' + str(args.bits) + '_' + str(args.k) + '_' + args.lossFunc
     print('saving file name is ', sv_name)
 
     write_arguments_to_file(args, os.path.join(logs_dir, sv_name+'_arguments.txt'))
@@ -298,8 +302,11 @@ def main():
         
     print('GPU Disabled: ',gpuDisabled)
     
+    
 
-    lossFunc = nn.MSELoss()
+
+        
+    
     
 
     optimizerS1 = optim.Adam(modelS1.parameters(), lr=args.lr, weight_decay=1e-4)
@@ -341,7 +348,7 @@ def main():
         print('-' * 10)
 
 
-        train(train_data_loader, modelS1,modelS2, optimizerS1,optimizerS2, epoch, use_cuda, train_writer,gpuDisabled,lossFunc)
+        train(train_data_loader, modelS1,modelS2, optimizerS1,optimizerS2, epoch, use_cuda, train_writer,gpuDisabled)
                         
         mAP,val_S1codes,val_S2codes,label_val,name_valS1,name_valS2 = val(val_data_loader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer,gpuDisabled)
         
@@ -427,93 +434,118 @@ def main():
     
 
 
-def train(trainloader, modelS1,modelS2, optimizerS1,optimizerS2, epoch, use_cuda, train_writer,gpuDisabled,lossFunc):
+def train(trainloader, modelS1,modelS2, optimizerS1,optimizerS2, epoch, use_cuda, train_writer,gpuDisabled):
 
-    label_train = []
-    name_trainS1 = []
-    name_trainS2 = []
-    generated_S1codes = []
-    generated_S2codes = []    
-    
+     
     lossTracker = MetricTracker()
     
     modelS1.train()
     modelS2.train()
     
     for idx, (dataS1,dataS2) in enumerate(tqdm(trainloader, desc="training")):
-        
         numSample = dataS2["bands10"].size(0)
-        halfNumSample = numSample // 2
+        #print('Batch Size:',numSample)
         
-        #print('halfNumSample:',halfNumSample)
-
-        if gpuDisabled :
-            bands1 = torch.cat((dataS2["bands10"][:halfNumSample], dataS2["bands20"][:halfNumSample],dataS2["bands60"][:halfNumSample]), dim=1).to(torch.device("cpu"))
-            polars1 = torch.cat((dataS1["polarVH"][:halfNumSample], dataS1["polarVV"][:halfNumSample]), dim=1).to(torch.device("cpu"))
-            labels1 = dataS2["label"][:halfNumSample].to(torch.device("cpu")) 
+        if not args.lossFunc == 'TripletLoss':
+            lossFunc = nn.MSELoss()
             
-            bands2 = torch.cat((dataS2["bands10"][halfNumSample:], dataS2["bands20"][halfNumSample:],dataS2["bands60"][halfNumSample:]), dim=1).to(torch.device("cpu"))
-            polars2 = torch.cat((dataS1["polarVH"][halfNumSample:], dataS1["polarVV"][halfNumSample:]), dim=1).to(torch.device("cpu"))
-            labels2 = dataS2["label"][halfNumSample:].to(torch.device("cpu")) 
+            halfNumSample = numSample // 2
             
-            labels = torch.cat((labels1,labels2)).to(torch.device('cpu'))
             
-            onesTensor = torch.ones(halfNumSample)
-            
-        
-        else:            
-            bands1 = torch.cat((dataS2["bands10"][:halfNumSample], dataS2["bands20"][:halfNumSample],dataS2["bands60"][:halfNumSample]), dim=1).to(torch.device("cuda"))
-            polars1 = torch.cat((dataS1["polarVH"][:halfNumSample], dataS1["polarVV"][:halfNumSample]), dim=1).to(torch.device("cuda"))
-            labels1 = dataS2["label"][:halfNumSample].to(torch.device("cuda")) 
-            
-            bands2 = torch.cat((dataS2["bands10"][halfNumSample:], dataS2["bands20"][halfNumSample:],dataS2["bands60"][halfNumSample:]), dim=1).to(torch.device("cuda"))
-            polars2 = torch.cat((dataS1["polarVH"][halfNumSample:], dataS1["polarVV"][halfNumSample:]), dim=1).to(torch.device("cuda"))
-            labels2 = dataS2["label"][halfNumSample:].to(torch.device("cuda")) 
-            
-            labels = torch.cat((labels1,labels2)).to(torch.device('cuda'))
-            
-            onesTensor = torch.cuda.FloatTensor(halfNumSample).fill_(0)
-        
+    
+            if gpuDisabled :
+                bands1 = torch.cat((dataS2["bands10"][:halfNumSample], dataS2["bands20"][:halfNumSample],dataS2["bands60"][:halfNumSample]), dim=1).to(torch.device("cpu"))
+                polars1 = torch.cat((dataS1["polarVH"][:halfNumSample], dataS1["polarVV"][:halfNumSample]), dim=1).to(torch.device("cpu"))
+                labels1 = dataS2["label"][:halfNumSample].to(torch.device("cpu")) 
                 
+                bands2 = torch.cat((dataS2["bands10"][halfNumSample:], dataS2["bands20"][halfNumSample:],dataS2["bands60"][halfNumSample:]), dim=1).to(torch.device("cpu"))
+                polars2 = torch.cat((dataS1["polarVH"][halfNumSample:], dataS1["polarVV"][halfNumSample:]), dim=1).to(torch.device("cpu"))
+                labels2 = dataS2["label"][halfNumSample:].to(torch.device("cpu")) 
+                
+                labels = torch.cat((labels1,labels2)).to(torch.device('cpu'))
+                
+                onesTensor = torch.ones(halfNumSample)
+                
+            
+            else:            
+                bands1 = torch.cat((dataS2["bands10"][:halfNumSample], dataS2["bands20"][:halfNumSample],dataS2["bands60"][:halfNumSample]), dim=1).to(torch.device("cuda"))
+                polars1 = torch.cat((dataS1["polarVH"][:halfNumSample], dataS1["polarVV"][:halfNumSample]), dim=1).to(torch.device("cuda"))
+                labels1 = dataS2["label"][:halfNumSample].to(torch.device("cuda")) 
+                
+                bands2 = torch.cat((dataS2["bands10"][halfNumSample:], dataS2["bands20"][halfNumSample:],dataS2["bands60"][halfNumSample:]), dim=1).to(torch.device("cuda"))
+                polars2 = torch.cat((dataS1["polarVH"][halfNumSample:], dataS1["polarVV"][halfNumSample:]), dim=1).to(torch.device("cuda"))
+                labels2 = dataS2["label"][halfNumSample:].to(torch.device("cuda")) 
+                
+                labels = torch.cat((labels1,labels2)).to(torch.device('cuda'))
+                
+                onesTensor = torch.cuda.FloatTensor(halfNumSample).fill_(0)
+            
+                    
+            
+            optimizerS1.zero_grad()
+            optimizerS2.zero_grad()
+            
+            logitsS1_1 = modelS1(polars1)
+            logitsS1_2 = modelS1(polars2)
+            
+            logitsS2_1 = modelS2(bands1)
+            logitsS2_2 = modelS2(bands2)
+    
+    
+            cos = torch.nn.CosineSimilarity(dim=1)
+            cosBetweenLabels = cos(labels1,labels2)
+            
+            cosBetweenS1 = cos(logitsS1_1,logitsS1_2)
+            cosBetweenS2 = cos(logitsS2_1,logitsS2_2)
+            
+            cosInterSameLabel1 = cos(logitsS1_1,logitsS2_1  )
+            cosInterSameLabel2 = cos(logitsS1_2, logitsS2_2)
+            
+            cosInterDifLabel1 = cos(logitsS1_1,logitsS2_2)
+            cosInterDifLabel2 = cos(logitsS1_2,logitsS2_1)
+            
         
-        optimizerS1.zero_grad()
-        optimizerS2.zero_grad()
-        
-        logitsS1_1 = modelS1(polars1)
-        logitsS1_2 = modelS1(polars2)
-        
-        logitsS2_1 = modelS2(bands1)
-        logitsS2_2 = modelS2(bands2)
-
-
-        cos = torch.nn.CosineSimilarity(dim=1)
-        cosBetweenLabels = cos(labels1,labels2)
-        
-        cosBetweenS1 = cos(logitsS1_1,logitsS1_2)
-        cosBetweenS2 = cos(logitsS2_1,logitsS2_2)
-        
-        cosInterSameLabel1 = cos(logitsS1_1,logitsS2_1  )
-        cosInterSameLabel2 = cos(logitsS1_2, logitsS2_2)
-        
-        cosInterDifLabel1 = cos(logitsS1_1,logitsS2_2)
-        cosInterDifLabel2 = cos(logitsS1_2,logitsS2_1)
+            S1IntraLoss = lossFunc(cosBetweenS1,cosBetweenLabels)
+            S2IntraLoss = lossFunc(cosBetweenS2,cosBetweenLabels)
         
     
-        S1IntraLoss = lossFunc(cosBetweenS1,cosBetweenLabels)
-        S2IntraLoss = lossFunc(cosBetweenS2,cosBetweenLabels)
-    
+            InterLoss_SameLabel1 = lossFunc(cosInterSameLabel1,onesTensor)
+            InterLoss_SameLabel2 = lossFunc(cosInterSameLabel2,onesTensor)
+            
+            InterLoss_DifLabel1 = lossFunc(cosInterDifLabel1,cosBetweenLabels)
+            InterLoss_DifLabel2 = lossFunc(cosInterDifLabel2,cosBetweenLabels)
+            
+            loss = 0.33 * S1IntraLoss + 0.33 * S2IntraLoss + 0.0825 * InterLoss_SameLabel1 + 0.0825 *  InterLoss_SameLabel2 + 0.0825 * InterLoss_DifLabel1 * 0.0825 * InterLoss_DifLabel2
+        
+        else:
+            if gpuDisabled :
+                bands = torch.cat((dataS2["bands10"], dataS2["bands20"],dataS2["bands60"]), dim=1).to(torch.device("cpu"))
+                polars = torch.cat((dataS1["polarVH"], dataS1["polarVV"]), dim=1).to(torch.device("cpu"))
+                labels = dataS2["label"].to(torch.device("cpu")) 
+                
+            else:            
+                bands = torch.cat((dataS2["bands10"], dataS2["bands20"],dataS2["bands60"]), dim=1).to(torch.device("cuda"))
+                polars = torch.cat((dataS1["polarVH"], dataS1["polarVV"]), dim=1).to(torch.device("cuda"))
+                labels = dataS2["label"].to(torch.device("cuda")) 
+                
+            optimizerS1.zero_grad()
+            optimizerS2.zero_grad()
+            
+            logitsS1 = modelS1(polars)
+            logitsS2 = modelS2(bands)
+            
+            triplets = get_triplets(labels)
+            
+            S1IntraLoss = triplet_loss(logitsS1[triplets[0]], logitsS1[triplets[1]], logitsS1[triplets[2]] )
+            S2IntraLoss = triplet_loss(logitsS2[triplets[0]], logitsS2[triplets[1]], logitsS2[triplets[2]] )
+            
+            InterLoss1 = triplet_loss(logitsS1[triplets[0]], logitsS2[triplets[1]], logitsS2[triplets[2]] )
+            InterLoss2 = triplet_loss(logitsS2[triplets[0]], logitsS1[triplets[1]], logitsS1[triplets[2]] )
 
-        InterLoss_SameLabel1 = lossFunc(cosInterSameLabel1,onesTensor)
-        InterLoss_SameLabel2 = lossFunc(cosInterSameLabel2,onesTensor)
-        
-        InterLoss_DifLabel1 = lossFunc(cosInterDifLabel1,cosBetweenLabels)
-        InterLoss_DifLabel2 = lossFunc(cosInterDifLabel2,cosBetweenLabels)
-        
-        loss = 0.33 * S1IntraLoss + 0.33 * S2IntraLoss + 0.0825 * InterLoss_SameLabel1 + 0.0825 *  InterLoss_SameLabel2 + 0.0825 * InterLoss_DifLabel1 * 0.0825 * InterLoss_DifLabel2
-        
-
-        
-
+            loss = 0.25 * S1IntraLoss + 0.25 * S2IntraLoss + 0.25 * InterLoss1 + 0.25 * InterLoss2
+                
+            
+            
         loss.backward()
         optimizerS1.step()
         optimizerS2.step()
@@ -521,14 +553,6 @@ def train(trainloader, modelS1,modelS2, optimizerS1,optimizerS2, epoch, use_cuda
 
         lossTracker.update(loss.item(), numSample)
 
-        generated_S1codes += list(logitsS1_1) + list(logitsS1_2)
-        generated_S2codes += list(logitsS2_1) + list(logitsS2_2)
-        
-        label_train += list(labels)
-        
-        name_trainS1 += list(dataS1['patchName'])
-        name_trainS2 += list(dataS2['patchName'])
-        
 
     train_writer.add_scalar("loss", lossTracker.avg, epoch)
 
