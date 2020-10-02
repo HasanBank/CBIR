@@ -31,7 +31,7 @@ from utils.ResNet import ResNet50_S1, ResNet50_S2
 
 from utils.dataGenBigEarth import dataGenBigEarthLMDB, ToTensor, Normalize, ConcatDataset
 
-from utils.metrics import MetricTracker, get_k_hamming_neighbours, get_mAP,timer, Recall_score, F1_score, F2_score, Hamming_loss, Subset_accuracy, \
+from utils.metrics import MetricTracker, get_k_hamming_neighbours, get_mAP,f1Score, get_average_precision_recall, timer, Recall_score, F1_score, F2_score, Hamming_loss, Subset_accuracy, \
     Accuracy_score, One_error, Coverage_error, Ranking_loss, LabelAvgPrec_score
 
 
@@ -73,6 +73,7 @@ args = parser.parse_args()
 
 checkpoint_dir = os.path.join('./', 'Resnet50Pair', 'checkpoints')
 logs_dir = os.path.join('./', 'Resnet50Pair', 'logs')
+result_dir = os.path.join('./', 'Resnet50Pair', 'results')
 dataset_dir = os.path.join('./','Resnet50Pair','dataset')
 
 
@@ -82,6 +83,12 @@ if not os.path.isdir(logs_dir):
     os.makedirs(logs_dir)
 if not os.path.isdir(dataset_dir):
     os.makedirs(dataset_dir)
+if not os.path.isdir(result_dir):
+    os.makedirs(result_dir)
+    
+    
+beta = 0.001
+gamma = 1    
     
 def write_arguments_to_file(args, filename):
     with open(filename, 'w') as f:
@@ -114,6 +121,38 @@ def get_triplets(train_labels):
     
     return triplets
 
+
+#Binarization Loss
+def pushLoss(logitS1, logitS2):
+    
+    lossDifference = torch.nn.L1Loss(reduction='none')
+    
+    TensorThreshold = torch.ones_like(logitS1) * 0.5
+        
+    errorS1 = torch.sum( lossDifference(logitS1,TensorThreshold) ** 2, 1, True  )
+    errorS2 = torch.sum( lossDifference(logitS2,TensorThreshold) ** 2, 1, True  ) 
+
+    averageError = (errorS1 + errorS2) / 2
+    return torch.mean(averageError)
+    
+    
+def balancingLoss(logitS1, logitS2):    
+    
+    lossDifference = torch.nn.L1Loss(reduction='none')
+    
+    meanS1 = torch.mean(logitS1,1,True)
+    meanS2 = torch.mean(logitS2,1,True)
+    
+    tensorThreshold = torch.ones_like(meanS1) * 0.5
+    
+    errorS1 = lossDifference(meanS1,tensorThreshold) **2   
+    errorS2 = lossDifference(meanS2,tensorThreshold) **2
+    
+    averageError = (errorS1 + errorS2) / 2
+    return torch.mean(averageError)
+    
+    
+
 def triplet_loss(a, p, n, margin=0.2) : 
     d = nn.PairwiseDistance(p=2)
     distance = d(a, p) - d(a, n) + margin 
@@ -132,6 +171,13 @@ def main():
 
     write_arguments_to_file(args, os.path.join(logs_dir, sv_name+'_arguments.txt'))
 
+    
+    resultsFile_name = os.path.join(result_dir, sv_name+'_results.txt')
+    
+    
+    
+    
+    
     use_cuda = torch.cuda.is_available()
 
     if use_cuda:
@@ -347,10 +393,17 @@ def main():
         print('Epoch {}/{}'.format(epoch, args.epochs - 1))
         print('-' * 10)
 
+        with open(resultsFile_name, 'a') as resultsFile:
+            resultsFile.write('Epoch {}/{}\n'.format(epoch, args.epochs - 1))
+            resultsFile.write('-' * 10 + '\n')
 
-        train(train_data_loader, modelS1,modelS2, optimizerS1,optimizerS2, epoch, use_cuda, train_writer,gpuDisabled)
+
+
+
+
+        train(train_data_loader, modelS1,modelS2, optimizerS1,optimizerS2, epoch, use_cuda, train_writer,gpuDisabled,resultsFile_name)
                         
-        mAP,val_S1codes,val_S2codes,label_val,name_valS1,name_valS2 = val(val_data_loader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer,gpuDisabled)
+        mAP,val_S1codes,val_S2codes,label_val,name_valS1,name_valS2 = val(val_data_loader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer,gpuDisabled,resultsFile_name)
         
         val_S1codes = torch.stack(val_S1codes).reshape(len(val_S1codes),args.bits)
         val_S2codes = torch.stack(val_S2codes).reshape(len(val_S2codes),args.bits)
@@ -364,8 +417,13 @@ def main():
         
         print('is_best_acc: ',is_best_acc)
 
+
         if is_best_acc:
             
+            with open(resultsFile_name, 'a') as resultsFile:
+                resultsFile.write( 'Best Epoch: {}\n '.format(is_best_acc))
+                
+                
             generatedS1CodesToWriteFile = []
             generatedS2CodesToWriteFile = []
             trainedLabelsToWriteFile = []
@@ -394,6 +452,10 @@ def main():
     end = time.time()
     print('Training and Validation Time has been elapsed')
     print(timer(start,end))
+    
+    with open(resultsFile_name, 'a') as resultsFile:
+        resultsFile.write('Training and Validation Time has been elapsed:{}\n'.format(timer(start,end)))
+    
     
     
     if toWrite :
@@ -434,7 +496,7 @@ def main():
     
 
 
-def train(trainloader, modelS1,modelS2, optimizerS1,optimizerS2, epoch, use_cuda, train_writer,gpuDisabled):
+def train(trainloader, modelS1,modelS2, optimizerS1,optimizerS2, epoch, use_cuda, train_writer,gpuDisabled,resultsFile_name):
 
      
     lossTracker = MetricTracker()
@@ -467,7 +529,7 @@ def train(trainloader, modelS1,modelS2, optimizerS1,optimizerS2, epoch, use_cuda
                 onesTensor = torch.ones(halfNumSample)
                 
             
-            else:            
+            else:
                 bands1 = torch.cat((dataS2["bands10"][:halfNumSample], dataS2["bands20"][:halfNumSample],dataS2["bands60"][:halfNumSample]), dim=1).to(torch.device("cuda"))
                 polars1 = torch.cat((dataS1["polarVH"][:halfNumSample], dataS1["polarVV"][:halfNumSample]), dim=1).to(torch.device("cuda"))
                 labels1 = dataS2["label"][:halfNumSample].to(torch.device("cuda")) 
@@ -534,6 +596,11 @@ def train(trainloader, modelS1,modelS2, optimizerS1,optimizerS2, epoch, use_cuda
             logitsS1 = modelS1(polars)
             logitsS2 = modelS2(bands)
             
+            
+            pushLossValue = pushLoss(logitsS1,logitsS2)
+            balancingLossValue = balancingLoss(logitsS1,logitsS2)
+            
+
             triplets = get_triplets(labels)
             
             S1IntraLoss = triplet_loss(logitsS1[triplets[0]], logitsS1[triplets[1]], logitsS1[triplets[2]] )
@@ -542,9 +609,12 @@ def train(trainloader, modelS1,modelS2, optimizerS1,optimizerS2, epoch, use_cuda
             InterLoss1 = triplet_loss(logitsS1[triplets[0]], logitsS2[triplets[1]], logitsS2[triplets[2]] )
             InterLoss2 = triplet_loss(logitsS2[triplets[0]], logitsS1[triplets[1]], logitsS1[triplets[2]] )
 
-            loss = 0.25 * S1IntraLoss + 0.25 * S2IntraLoss + 0.25 * InterLoss1 + 0.25 * InterLoss2
-                
+            tripletLoss = 0.25 * S1IntraLoss + 0.25 * S2IntraLoss + 0.25 * InterLoss1 + 0.25 * InterLoss2
             
+            
+            loss = tripletLoss - beta * pushLossValue / args.bits + gamma * balancingLossValue
+            
+                    
             
         loss.backward()
         optimizerS1.step()
@@ -557,11 +627,13 @@ def train(trainloader, modelS1,modelS2, optimizerS1,optimizerS2, epoch, use_cuda
     train_writer.add_scalar("loss", lossTracker.avg, epoch)
 
     print('Train loss: {:.6f}'.format(lossTracker.avg))
-    
+    with open(resultsFile_name, 'a') as resultsFile:
+        resultsFile.write('Train loss: {:.6f}\n'.format(lossTracker.avg))
+
     
     
 
-def val(valloader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer, gpuDisabled):
+def val(valloader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer, gpuDisabled,resultsFile_name):
 
 
     modelS1.eval()
@@ -573,10 +645,38 @@ def val(valloader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer, gpuDisa
     name_valS1 = []
     name_valS2 = []
     
-    mapS1toS1 = 0 
+    mapS1toS1 = 0
     mapS1toS2 = 0
     mapS2toS1 = 0
     mapS2toS2 = 0
+    
+    mapS1toS1_precision = 0 
+    mapS1toS1_precision_weighted = 0 
+
+    mapS1toS1_recall = 0 
+    mapS1toS1_recall_weighted = 0 
+    
+
+    mapS1toS2_precision = 0 
+    mapS1toS2_precision_weighted = 0 
+
+    mapS1toS2_recall = 0 
+    mapS1toS2_recall_weighted = 0 
+
+
+    mapS2toS1_precision = 0 
+    mapS2toS1_precision_weighted = 0 
+
+    mapS2toS1_recall = 0 
+    mapS2toS1_recall_weighted = 0 
+
+    
+    mapS2toS2_precision = 0 
+    mapS2toS2_precision_weighted = 0 
+    
+    mapS2toS2_recall = 0 
+    mapS2toS2_recall_weighted = 0 
+    
     
     totalSize = 0 
 
@@ -598,10 +698,11 @@ def val(valloader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer, gpuDisa
             logitsS1 = modelS1(polars)
             logitsS2 = modelS2(bands)
 
+            """
             binaryS1 = torch.sigmoid(logitsS1)
             binaryS2 = torch.sigmoid(logitsS2)
         
-        
+            
             if gpuDisabled:
                 t = torch.Tensor([0.5])
             else:
@@ -609,7 +710,10 @@ def val(valloader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer, gpuDisa
         
             binaryS1 = (binaryS1 >= t).float()
             binaryS2 = (binaryS2 >= t).float()
-
+            """
+            
+            binaryS1 = (torch.sign(logitsS1 - 0.5) + 1 ) / 2
+            binaryS2 = (torch.sign(logitsS2 - 0.5) + 1 ) / 2
 
 
             predicted_S1codes += list(binaryS1)
@@ -644,46 +748,146 @@ def val(valloader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer, gpuDisa
         
         #S1 to S1
         neighboursIndices = get_k_hamming_neighbours(databaseS1, queryCodeS1)  
+        
         mapPerBatch = get_mAP(neighboursIndices,args.k,databaseLabels,queryLabel)
         mapS1toS1 += mapPerBatch
         
+        precisionPerQuery, recallPerQuery, precisionPerQuery_weighted, recallPerQuery_weighted = get_average_precision_recall(neighboursIndices, args.k, databaseLabels, queryLabel)
+        mapS1toS1_precision += precisionPerQuery
+        mapS1toS1_precision_weighted += precisionPerQuery_weighted
+        mapS1toS1_recall += recallPerQuery
+        mapS1toS1_recall_weighted += recallPerQuery_weighted
+        
         #S1 to S2
         neighboursIndices = get_k_hamming_neighbours(databaseS2,queryCodeS1)  
+        
         mapPerBatch = get_mAP(neighboursIndices,args.k,databaseLabels,queryLabel)
         mapS1toS2 += mapPerBatch
+        
+        precisionPerQuery, recallPerQuery, precisionPerQuery_weighted, recallPerQuery_weighted = get_average_precision_recall(neighboursIndices, args.k, databaseLabels, queryLabel)
+        mapS1toS2_precision += precisionPerQuery
+        mapS1toS2_precision_weighted += precisionPerQuery_weighted
+        mapS1toS2_recall += recallPerQuery
+        mapS1toS2_recall_weighted += recallPerQuery_weighted
+
+        
             
         #S2 to S1
         neighboursIndices = get_k_hamming_neighbours(databaseS1,queryCodeS2)  
+        
         mapPerBatch = get_mAP(neighboursIndices,args.k,databaseLabels,queryLabel)
         mapS2toS1 += mapPerBatch
+
+        precisionPerQuery, recallPerQuery,precisionPerQuery_weighted,recallPerQuery_weighted = get_average_precision_recall(neighboursIndices, args.k, databaseLabels, queryLabel)
+        mapS2toS1_precision += precisionPerQuery
+        mapS2toS1_precision_weighted += precisionPerQuery_weighted
+        mapS2toS1_recall += recallPerQuery
+        mapS2toS1_recall_weighted += recallPerQuery_weighted
                   
         #S2 to S2
         neighboursIndices = get_k_hamming_neighbours(databaseS2, queryCodeS2)  
         mapPerBatch = get_mAP(neighboursIndices,args.k,databaseLabels,queryLabel)
         mapS2toS2 += mapPerBatch
+        precisionPerQuery, recallPerQuery, precisionPerQuery_weighted, recallPerQuery_weighted = get_average_precision_recall(neighboursIndices, args.k, databaseLabels, queryLabel)
+        mapS2toS2_precision += precisionPerQuery
+        mapS2toS2_precision_weighted += precisionPerQuery_weighted
+        mapS2toS2_recall += recallPerQuery
+        mapS2toS2_recall_weighted += recallPerQuery_weighted
+
         
         
 
     
-    #print('MapS1toS1: ',mapS1toS1)
-    #print('len: ',totalSize)
+    mapS1toS1 = calculateAverageMetric(mapS1toS1,totalSize)
+    mapS1toS2 = calculateAverageMetric(mapS1toS2,totalSize)
+    mapS2toS1 = calculateAverageMetric(mapS2toS1,totalSize)
+    mapS2toS2 = calculateAverageMetric(mapS2toS2,totalSize)
     
-    mapS1toS1 = mapS1toS1 / totalSize * 100
-    mapS1toS2 = mapS1toS2 / totalSize * 100
-    mapS2toS1 = mapS2toS1 / totalSize * 100
-    mapS2toS2 = mapS2toS2 / totalSize * 100
 
+
+
+
+    f1S1toS1,f1S1toS1_weighted = printResultsAndGetF1Scores(mapS1toS1_precision,mapS1toS1_precision_weighted,mapS1toS1_recall,mapS1toS1_recall_weighted,'S1','S1',totalSize,resultsFile_name)
+    f1S1toS2,f1S1toS2_weighted = printResultsAndGetF1Scores(mapS1toS2_precision,mapS1toS2_precision_weighted,mapS1toS2_recall,mapS1toS2_recall_weighted,'S1','S2',totalSize,resultsFile_name)
+    f1S2toS1,f1S2toS1_weighted = printResultsAndGetF1Scores(mapS2toS1_precision,mapS2toS1_precision_weighted,mapS2toS1_recall,mapS2toS1_recall_weighted,'S2','S1',totalSize,resultsFile_name)
+    f1S2toS2,f1S2toS2_weighted = printResultsAndGetF1Scores(mapS2toS2_precision,mapS2toS2_precision_weighted,mapS2toS2_recall,mapS2toS2_recall_weighted,'S2','S2',totalSize,resultsFile_name)
+
+    
+    averageF1Score = (f1S1toS1+f1S1toS2+f1S2toS1+f1S2toS2) / 4
+    averageF1Score_weighted = (f1S1toS1_weighted+f1S1toS2_weighted+f1S2toS1_weighted+f1S2toS2_weighted) / 4
+    
+    print('Average F1-Score @',args.k,':{0}'.format(averageF1Score))
+    print('Average Weighted F1-Score @',args.k,':{0}'.format(averageF1Score_weighted))
+
+    
     print('MaP for S1 to S1: ', mapS1toS1)
     print('MaP for S1 to S2: ', mapS1toS2)
     print('MaP for S2 to S1: ', mapS2toS1)
     print('MaP for S2 to S2: ', mapS2toS2)
 
-
-
-    averageMap = (mapS1toS1 + mapS1toS2 + mapS2toS1 + mapS2toS2 ) / 4
-                   
+    averageMap = (mapS1toS1 + mapS1toS2 + mapS2toS1 + mapS2toS2 ) / 4           
     print('mAP@',args.k,':{0}'.format(averageMap))
+    
+    
+    with open(resultsFile_name, 'a') as resultsFile:
+         resultsFile.write('Average F1-Score @{}:{}\n'.format(args.k,averageF1Score))
+         resultsFile.write('Average Weighted F1-Score @{}:{}\n'.format(args.k,averageF1Score_weighted))
+         resultsFile.write('# Roy mAP Calculations #\n')
+         resultsFile.write("mAP S1-S1: {}\n ".format(mapS1toS1))
+         resultsFile.write("mAP S1-S2: {}\n ".format(mapS1toS2))
+         resultsFile.write("mAP S2-S1: {}\n ".format(mapS2toS1))
+         resultsFile.write("mAP S2-S2: {}\n ".format(mapS2toS2))
+
+    return (averageF1Score_weighted,predicted_S1codes,predicted_S2codes,label_val,name_valS1,name_valS2)
+    
+    
+
+    
+    '''
     return (averageMap,predicted_S1codes,predicted_S2codes,label_val,name_valS1,name_valS2)
+    '''
+
+
+def printResultsAndGetF1Scores(precision,precision_weighted,recall,recall_weighted,fromDataset,targetDataset,totalSize,resultsFile_name):
+    
+    precision = calculateAverageMetric(precision,totalSize)
+    recall = calculateAverageMetric(recall,totalSize)
+    precision_weighted = calculateAverageMetric(precision_weighted,totalSize)
+    recall_weighted = calculateAverageMetric(recall_weighted,totalSize)
+    
+    f1 = f1Score(precision,recall)
+    f1_weighted = f1Score(precision_weighted,recall_weighted)
+    
+    f1_string = tensorToStr(f1)
+    f1_weighted_string = tensorToStr(f1_weighted)
+    
+    
+    with open(resultsFile_name, 'a') as resultsFile:
+        resultsFile.write("mAP {}-{}: {}\n ".format(fromDataset, targetDataset,tensorToStr(precision)))
+        resultsFile.write('mAP {}-{} (weighted): {}\n '.format(fromDataset, targetDataset,tensorToStr(precision_weighted) ))
+        resultsFile.write("mAR {}-{}: {}\n ".format(fromDataset, targetDataset,tensorToStr(recall)))
+        resultsFile.write('mAR {}-{} (weighted): {}\n '.format(fromDataset, targetDataset,tensorToStr(recall_weighted) ))
+        resultsFile.write("f1 {}-{}: {}\n ".format(fromDataset, targetDataset,f1_string))
+        resultsFile.write('f1 {}-{} (weighted): {}\n '.format(fromDataset, targetDataset,f1_weighted_string ))
+
+    print( "f1 {}-{}: {}".format(fromDataset, targetDataset,f1_string))
+    print( "f1 {}-{} (weighted): {}".format(fromDataset, targetDataset,f1_weighted_string))
+
+    return (f1,f1_weighted)
+
+
+
+def calculateAverageMetric(sumMetric,totalSize):
+    return sumMetric / totalSize * 100
+
+
+def tensorToStr(tensor):
+    if torch.cuda.is_available():
+        return tensor.cpu().numpy().astype('str')
+    else:
+        return tensor.numpy().astype('str')
+    
+
 
 
 if __name__ == "__main__":
