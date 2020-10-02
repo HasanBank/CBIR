@@ -101,9 +101,14 @@ def get_mAP(indices, nrof_neighbors,trainLabels,queryLabels):
     for i in range(len(indices)):
         acc = np.empty((0,)).astype(np.float)
         correct = 0
-        queryLabel = queryLabels[i]
-        for j in range(nrof_neighbors):
-            similarity = torch.sum(torch.mul(queryLabel.data,trainLabels[indices[i][j]].data)).ge(1.0).detach().cpu().numpy().astype('bool')
+        
+        if type(queryLabels) == list:
+            queryLabel = queryLabels[i]
+        elif type(queryLabels) == torch.Tensor:
+            queryLabel = queryLabels
+        
+        for j in range(nrof_neighbors):            
+            similarity = torch.sum(torch.mul(queryLabel,trainLabels[indices[i][j]])).ge(1.0)
             if similarity:
                 correct += 1
                 precision = (correct / float(j+1))
@@ -120,6 +125,71 @@ def get_mAP(indices, nrof_neighbors,trainLabels,queryLabels):
     return totalMap
 
 
+def get_average_precision_recall(indices, nrof_neighbors, trainLabels, queryLabels):
+    
+    precisionTotal = np.empty((0,)).astype(np.float)
+    recallTotal = np.empty((0,)).astype(np.float)
+    
+    precisionWeightedTotal = np.empty((0,)).astype(np.float)
+    recallWeightedTotal = np.empty(0,).astype(np.float)
+    
+    for j in range(len(indices)):
+        
+        precisionPerQuery = np.empty((0,)).astype(np.float)
+        recallPerQuery = np.empty((0,)).astype(np.float)
+    
+        precisionWeightedPerQuery = np.empty((0,)).astype(np.float)
+        recallWeightedPerQuery = np.empty(0,).astype(np.float)
+        
+
+        if type(queryLabels) == list:
+            queryLabel = queryLabels[j]
+        elif type(queryLabels) == torch.Tensor:
+            queryLabel = queryLabels
+    
+    
+        for i in range(nrof_neighbors):
+        
+            retrivedImageLabel = trainLabels[indices[j][i]]
+    
+            numberOfLabels_retrived = torch.sum(retrivedImageLabel)
+            numberOfLabels_query = torch.sum(queryLabel)
+            numberOfCommonLabels = torch.sum(torch.mul(queryLabel,retrivedImageLabel))
+            
+            precisionPerInstance = numberOfCommonLabels / numberOfLabels_retrived
+            recallPerInstance = numberOfCommonLabels / numberOfLabels_query
+            
+            precisionPerQuery = np.append(precisionPerQuery, [precisionPerInstance, ], axis=0)
+            recallPerQuery = np.append(recallPerQuery, [recallPerInstance, ], axis=0)
+            
+            weightedPrecision = precisionPerInstance * (nrof_neighbors - i)
+            weightedRecall = recallPerInstance * (nrof_neighbors - i)
+            
+            precisionWeightedPerQuery = np.append(precisionWeightedPerQuery, [weightedPrecision, ], axis=0)
+            recallWeightedPerQuery = np.append(recallWeightedPerQuery, [weightedRecall, ], axis=0)
+            
+        
+        precisionPerQuery = np.sum(precisionPerQuery) / nrof_neighbors
+        recallPerQuery = np.sum(recallPerQuery) / nrof_neighbors
+
+        totalWeights = (nrof_neighbors * (nrof_neighbors + 1) ) / 2
+        precisionWeightedPerQuery = np.sum(precisionWeightedPerQuery) / totalWeights
+        recallWeightedPerQuery = np.sum(recallWeightedPerQuery) / totalWeights
+        
+        precisionTotal = np.append(precisionTotal, [precisionPerQuery, ], axis = 0)
+        recallTotal = np.append(recallTotal, [recallPerQuery, ], axis = 0)
+        precisionWeightedTotal = np.append(precisionWeightedTotal, [precisionWeightedPerQuery, ], axis = 0)
+        recallWeightedTotal = np.append(recallWeightedTotal, [recallWeightedPerQuery, ], axis = 0)
+
+  
+    return np.sum(precisionTotal), np.sum(recallTotal), np.sum(precisionWeightedTotal), np.sum(recallWeightedTotal)
+
+    
+
+def f1Score(precision,recall):
+    return 2 * (precision * recall ) / ( precision + recall)
+
+
 
 
 def get_k_hamming_neighbours(enc_train,enc_query_imgs):
@@ -129,7 +199,18 @@ def get_k_hamming_neighbours(enc_train,enc_query_imgs):
     #hammingDistances = torch.cdist(queryCodeTensors,trainedCodeTensors, p = 2)
     sortedDistances, indices = torch.sort(hammingDistances)
     
+    return indices
+    '''
+    if torch.cuda.is_available():
+        return indices
+    else
     return indices.detach().cpu().numpy().astype('int')
+    '''
+    
+def timer(start,end):
+    hours, rem = divmod(end-start, 3600)
+    minutes, seconds = divmod(rem, 60)
+    return("{:0>2}:{:0>2}:{:05.2f}".format(int(hours),int(minutes),seconds))    
     
     
 
