@@ -1,11 +1,6 @@
-# -*- coding: utf-8 -*-
 #
-# This script can be used to train any deep learning model on the BigEarthNet.
-#
-# To run the code, you need to provide a json file for configurations of the training.
-#
-# Author: Jian Kang, https://www.rsim.tu-berlin.de/menue/team/dring_jian_kang/
-# Email: jian.kang@tu-berlin.de
+# Author: Hasan Bank
+# Email: hasanbank@gmail.com
 
 import os
 import numpy as np
@@ -28,14 +23,12 @@ import sys
 sys.path.append('../')
 
 from utils.ResNet import ResNet50_S1, ResNet50_S2
-
 from utils.dataGenBigEarth import dataGenBigEarthLMDB, ToTensor, Normalize, ConcatDataset
+from utils.metrics import MetricTracker, get_k_hamming_neighbours, get_mAP, get_average_precision_recall, timer,\
+     calculateAverageMetric,printResultsAndGetF1Scores
 
-from utils.metrics import MetricTracker, get_k_hamming_neighbours, get_mAP,f1Score, get_average_precision_recall, timer, Recall_score, F1_score, F2_score, Hamming_loss, Subset_accuracy, \
-    Accuracy_score, One_error, Coverage_error, Ranking_loss, LabelAvgPrec_score
 
-
-parser = argparse.ArgumentParser(description='PyTorch multi-label classification')
+parser = argparse.ArgumentParser(description='PyTorch multi-label Sentinel Images CBIR')
 parser.add_argument('--S1LMDBPth', metavar='DATA_DIR',
                         help='path to the saved sentinel 1 LMDB dataset')
 parser.add_argument('--S2LMDBPth', metavar='DATA_DIR',
@@ -44,27 +37,22 @@ parser.add_argument('-b', '--batch-size', default=200, type=int,
                         metavar='N', help='mini-batch size (default: 200)')
 parser.add_argument('--epochs', type=int, default=500, help='epoch number')
 parser.add_argument('--k', type=int, default=20, help='number of retrived images per query')
-
 parser.add_argument('--lr', default=0.001, type=float, help='initial learning rate')
 parser.add_argument('--resume', '-r', help='path to the pretrained weights file', default=None, type=str)
 parser.add_argument('--num_workers', default=8, type=int, metavar='N',
                         help='num_workers for data loading in pytorch')
-
 parser.add_argument('--bits', type=int, default=16, help='number of bits to use in hashing')
-
 parser.add_argument('--BigEarthNet19', dest='BigEarthNet19', action='store_true',
                     help='use the BigEarthNet19 class nomenclature')
 parser.add_argument('--big1000', dest='big1000', action='store_true', help='for small dataset')
 parser.add_argument('--serbia', dest='serbia', action='store_true',
                     help='use the serbia patches')
-
 parser.add_argument('--train_csvS1', metavar='CSV_PTH',
                         help='path to the csv file of train patches')
 parser.add_argument('--val_csvS1', metavar='CSV_PTH',
                         help='path to the csv file of val patches')
 parser.add_argument('--test_csvS1', metavar='CSV_PTH',
                         help='path to the csv file of test patches')
-
 parser.add_argument('-loss', '--lossFunction', type=str, dest = 'lossFunc', help="which loss function will be used?", choices=['MSELoss', 'TripletLoss'], default='MSELoss')
 
 
@@ -98,7 +86,6 @@ def write_arguments_to_file(args, filename):
 def save_checkpoint(state, is_best, name):
 
     filename = os.path.join(checkpoint_dir, name + '_checkpoint.pth.tar')
-
     torch.save(state, filename)
     if is_best:
         shutil.copyfile(filename, os.path.join(checkpoint_dir, name + '_model_best.pth.tar'))
@@ -416,13 +403,15 @@ def main():
         best_acc = max(best_acc, mAP)
         
         print('is_best_acc: ',is_best_acc)
+        
+        with open(resultsFile_name, 'a') as resultsFile:
+                resultsFile.write( 'Best Epoch: {}\n '.format(is_best_acc))
+                
 
 
         if is_best_acc:
             
-            with open(resultsFile_name, 'a') as resultsFile:
-                resultsFile.write( 'Best Epoch: {}\n '.format(is_best_acc))
-                
+
                 
             generatedS1CodesToWriteFile = []
             generatedS2CodesToWriteFile = []
@@ -837,6 +826,7 @@ def val(valloader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer, gpuDisa
          resultsFile.write("mAP S1-S2: {}\n ".format(mapS1toS2))
          resultsFile.write("mAP S2-S1: {}\n ".format(mapS2toS1))
          resultsFile.write("mAP S2-S2: {}\n ".format(mapS2toS2))
+         resultsFile.write("Average mAP@[}: {}\n ".format(args.k, averageMap))
 
     return (averageF1Score_weighted,predicted_S1codes,predicted_S2codes,label_val,name_valS1,name_valS2)
     
@@ -848,45 +838,12 @@ def val(valloader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer, gpuDisa
     '''
 
 
-def printResultsAndGetF1Scores(precision,precision_weighted,recall,recall_weighted,fromDataset,targetDataset,totalSize,resultsFile_name):
-    
-    precision = calculateAverageMetric(precision,totalSize)
-    recall = calculateAverageMetric(recall,totalSize)
-    precision_weighted = calculateAverageMetric(precision_weighted,totalSize)
-    recall_weighted = calculateAverageMetric(recall_weighted,totalSize)
-    
-    f1 = f1Score(precision,recall)
-    f1_weighted = f1Score(precision_weighted,recall_weighted)
-    
-    f1_string = tensorToStr(f1)
-    f1_weighted_string = tensorToStr(f1_weighted)
-    
-    
-    with open(resultsFile_name, 'a') as resultsFile:
-        resultsFile.write("mAP {}-{}: {}\n ".format(fromDataset, targetDataset,tensorToStr(precision)))
-        resultsFile.write('mAP {}-{} (weighted): {}\n '.format(fromDataset, targetDataset,tensorToStr(precision_weighted) ))
-        resultsFile.write("mAR {}-{}: {}\n ".format(fromDataset, targetDataset,tensorToStr(recall)))
-        resultsFile.write('mAR {}-{} (weighted): {}\n '.format(fromDataset, targetDataset,tensorToStr(recall_weighted) ))
-        resultsFile.write("f1 {}-{}: {}\n ".format(fromDataset, targetDataset,f1_string))
-        resultsFile.write('f1 {}-{} (weighted): {}\n '.format(fromDataset, targetDataset,f1_weighted_string ))
-
-    print( "f1 {}-{}: {}".format(fromDataset, targetDataset,f1_string))
-    print( "f1 {}-{} (weighted): {}".format(fromDataset, targetDataset,f1_weighted_string))
-
-    return (f1,f1_weighted)
 
 
 
-def calculateAverageMetric(sumMetric,totalSize):
-    return sumMetric / totalSize * 100
 
 
-def tensorToStr(tensor):
-    if torch.cuda.is_available():
-        return tensor.cpu().numpy().astype('str')
-    else:
-        return tensor.numpy().astype('str')
-    
+
 
 
 
