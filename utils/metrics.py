@@ -1,15 +1,12 @@
 """ 
-metrics utilized for evaluating multi-label classification system
+metrics utilized for evaluating multi-label CBIR system
 """
 import torch
-import torch.nn as nn
 import numpy as np
+import os
+import rasterio
 
-import torch.nn.functional as F
 
-from sklearn.metrics import f1_score, precision_score, recall_score, fbeta_score, \
-    classification_report, hamming_loss, accuracy_score, coverage_error, label_ranking_loss,\
-    label_ranking_average_precision_score, classification_report
 
 
 class MetricTracker(object):
@@ -30,69 +27,7 @@ class MetricTracker(object):
         self.avg = self.sum / self.count
 
 
-class Precision_score(nn.Module):
-
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, predict_labels, true_labels):
-
-        sample_prec = precision_score(true_labels, predict_labels, average='samples')
-        micro_prec = precision_score(true_labels, predict_labels, average='micro')
-        macro_prec = precision_score(true_labels, predict_labels, average='macro')
-
-        return macro_prec, micro_prec, sample_prec    
-
-
-class Recall_score(nn.Module):
-
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, predict_labels, true_labels):
-
-        sample_rec = recall_score(true_labels, predict_labels, average='samples')
-        micro_rec = recall_score(true_labels, predict_labels, average='micro')
-        macro_rec = recall_score(true_labels, predict_labels, average='macro')
-
-        return macro_rec, micro_rec, sample_rec
-
-
-class F1_score(nn.Module):
-
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, predict_labels, true_labels):
-
-        macro_f1 = f1_score(true_labels, predict_labels, average="macro")
-        micro_f1 = f1_score(true_labels, predict_labels, average="micro")
-        sample_f1 = f1_score(true_labels, predict_labels, average="samples")
-
-        return macro_f1, micro_f1, sample_f1
-
-
-class F2_score(nn.Module):
-
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, predict_labels, true_labels):
-
-        macro_f2 = fbeta_score(true_labels, predict_labels, beta=2, average="macro")
-        micro_f2 = fbeta_score(true_labels, predict_labels, beta=2, average="micro")
-        sample_f2 = fbeta_score(true_labels, predict_labels, beta=2, average="samples")
-
-        return macro_f2, micro_f2, sample_f2
-
-class Hamming_loss(nn.Module):
-
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, predict_labels, true_labels):
-
-        return hamming_loss(true_labels, predict_labels)
+ 
 
 def get_mAP(indices, nrof_neighbors,trainLabels,queryLabels):
     
@@ -189,132 +124,120 @@ def get_average_precision_recall(indices, nrof_neighbors, trainLabels, queryLabe
 def f1Score(precision,recall):
     return 2 * (precision * recall ) / ( precision + recall)
 
+def calculateAverageMetric(sumMetric,totalSize):
+    return sumMetric / totalSize * 100
+
+def lineWriteToFile(fileName,lines):
+    with open(fileName, 'a') as file:
+        for line in lines:
+            file.write(line)
+        
 
 
+def printResultsAndGetF1Scores(precision,precision_weighted,recall,recall_weighted,fromDataset,targetDataset,totalSize,resultsFile_name):
+    
+    precision = calculateAverageMetric(precision,totalSize)
+    recall = calculateAverageMetric(recall,totalSize)
+    precision_weighted = calculateAverageMetric(precision_weighted,totalSize)
+    recall_weighted = calculateAverageMetric(recall_weighted,totalSize)
+    
+    f1 = f1Score(precision,recall)
+    f1_weighted = f1Score(precision_weighted,recall_weighted)
+    
+    f1_string = tensorToStr(f1)
+    f1_weighted_string = tensorToStr(f1_weighted)
+    
+    
+    unweigtedMAPLine = "mAP {}-{}: {}\n ".format(fromDataset, targetDataset,tensorToStr(precision))
+    weightedMAPLine = "mAP {}-{} (weighted): {}\n ".format(fromDataset, targetDataset,tensorToStr(precision_weighted))
+    unweightedMARLine = "mAR {}-{}: {}\n ".format(fromDataset, targetDataset,tensorToStr(recall))
+    weightedMARLine = "mAR {}-{} (weighted): {}\n ".format(fromDataset, targetDataset,tensorToStr(recall_weighted))
+    unweightedF1Line = "f1 {}-{}: {}\n ".format(fromDataset, targetDataset,f1_string)
+    weightedF1Line = 'f1 {}-{} (weighted): {}\n '.format(fromDataset, targetDataset,f1_weighted_string )
+    
+    lineWriteToFile(resultsFile_name,unweigtedMAPLine)
+    lineWriteToFile(resultsFile_name,weightedMAPLine)
+    lineWriteToFile(resultsFile_name,unweightedMARLine)
+    lineWriteToFile(resultsFile_name,weightedMARLine)
+    lineWriteToFile(resultsFile_name,unweightedF1Line)
+    lineWriteToFile(resultsFile_name,weightedF1Line)
 
-def get_k_hamming_neighbours(enc_train,enc_query_imgs):
-    
-    
-    hammingDistances = torch.cdist(enc_query_imgs,enc_train, p = 0)
-    #hammingDistances = torch.cdist(queryCodeTensors,trainedCodeTensors, p = 2)
-    sortedDistances, indices = torch.sort(hammingDistances)
-    
-    return indices
-    '''
+
+    print(unweightedF1Line)
+    print(weightedF1Line)
+
+    return (f1,f1_weighted)
+
+def tensorToStr(tensor):
     if torch.cuda.is_available():
-        return indices
-    else
-    return indices.detach().cpu().numpy().astype('int')
-    '''
+        return tensor.cpu().numpy().astype('str')
+    else:
+        return tensor.numpy().astype('str')
+    
+
+
+
+
+def get_k_hamming_neighbours(enc_train,enc_query_imgs):    
+    hammingDistances = torch.cdist(enc_query_imgs,enc_train, p = 0)
+    sortedDistances, indices = torch.sort(hammingDistances)    
+    return indices
+
+
     
 def timer(start,end):
     hours, rem = divmod(end-start, 3600)
     minutes, seconds = divmod(rem, 60)
     return("{:0>2}:{:0>2}:{:05.2f}".format(int(hours),int(minutes),seconds))    
     
+
+def createTrueColorTiff(S2FolderDir,S2FolderName,destinationFileFullName):
     
-
-
-class Subset_accuracy(nn.Module): 
-
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, predict_labels, true_labels):
-
-        return accuracy_score(true_labels, predict_labels)
-
-class Accuracy_score(nn.Module):
-
-    def __init__(self):
-        super().__init__()
+    band2 = os.path.join(S2FolderDir,S2FolderName,S2FolderName+'_B02.tif')
+    band3 = os.path.join(S2FolderDir,S2FolderName,S2FolderName+'_B03.tif')
+    band4 = os.path.join(S2FolderDir,S2FolderName,S2FolderName+'_B04.tif')
     
-    def forward(self, predict_labels, true_labels):
-
-        # sample accuracy
-        TP = (np.logical_and((predict_labels == 1), (true_labels == 1))).astype(int)
-        union = (np.logical_or((predict_labels == 1), (true_labels == 1))).astype(int)
-        TP_sample = TP.sum(axis=1)
-        union_sample = union.sum(axis=1)
-
-        sample_Acc = TP_sample/union_sample
-
-        assert np.isfinite(sample_Acc).all(), 'Nan found in sample accuracy'
-
-        FP = (np.logical_and((predict_labels == 1), (true_labels == 0))).astype(int)
-        TN = (np.logical_and((predict_labels == 0), (true_labels == 0))).astype(int)
-        FN = (np.logical_and((predict_labels == 0), (true_labels == 1))).astype(int)
-
-        TP_cls = TP.sum(axis=0)
-        FP_cls = FP.sum(axis=0)
-        TN_cls = TN.sum(axis=0)
-        FN_cls = FN.sum(axis=0)
-
-        assert (TP_cls+FP_cls+TN_cls+FN_cls == predict_labels.shape[0]).all(), 'wrong'
-
-        macro_Acc = np.mean((TP_cls + TN_cls) / (TP_cls + FP_cls + TN_cls + FN_cls))
-
-        micro_Acc = (TP_cls.mean() + TN_cls.mean()) / (TP_cls.mean() + FP_cls.mean() + TN_cls.mean() + FN_cls.mean())
-
-        return macro_Acc, micro_Acc, sample_Acc.mean()
+    file_list = [band4, band3, band2]
+    
+    # Read metadata of first file
+    with rasterio.open(file_list[0]) as src0:
+        meta = src0.meta
+    
+    # Update meta to reflect the number of layers
+    meta.update(count = len(file_list))
+    
+    # Read each layer and write it to stack
+    with rasterio.open(destinationFileFullName, 'w', **meta) as dst:
+        for id, layer in enumerate(file_list, start=1):
+            with rasterio.open(layer) as src1:
+                dst.write_band(id, src1.read(1))
 
 
-class One_error(nn.Module):
-    def __init__(self):
-        super().__init__()
+def falseRepresentationS1(S1FolderDir,S1FolderName,destinationFileFullName):
+    
+    polarVH = os.path.join(S1FolderDir,S1FolderName,S1FolderName+'_VH.tif')
+    polarVV = os.path.join(S1FolderDir,S1FolderName,S1FolderName+'_VV.tif')
+    
+    file_list = [polarVH, polarVV, polarVV ]
+    
+    # Read metadata of first file
+    with rasterio.open(file_list[0]) as src0:
+        meta = src0.meta
+    
+    # Update meta to reflect the number of layers
+    meta.update(count = len(file_list))
+    
+    # Read each layer and write it to stack
+    with rasterio.open(destinationFileFullName, 'w', **meta) as dst:
+        for id, layer in enumerate(file_list, start=1):
+            with rasterio.open(layer) as src1:
+                dst.write_band(id, src1.read(1))
 
-    def forward(self, predict_probs, true_labels):
-        row_inds = np.arange(predict_probs.shape[0])
-        col_inds = np.argmax(predict_probs, axis=1)
-        return np.mean((true_labels[tuple(row_inds), tuple(col_inds)] == 0).astype(int))
 
-class Coverage_error(nn.Module):
 
-    def __init__(self):
-        super().__init__()
 
-    def forward(self, predict_probs, true_labels):
-        return coverage_error(true_labels, predict_probs)
 
-class Ranking_loss(nn.Module):
 
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, predict_probs, true_labels):
-        return label_ranking_loss(true_labels, predict_probs)
-
-class LabelAvgPrec_score(nn.Module):
-
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, predict_probs, true_labels):
-        return label_ranking_average_precision_score(true_labels, predict_probs)
-
-class calssification_report(nn.Module):
-
-    def __init__(self, target_names):
-        super().__init__()
-        self.target_names = target_names
-    def forward(self, predict_labels, true_labels):
-
-        report = classification_report(true_labels, predict_labels, target_names=self.target_names, output_dict=True)
-
-        return report
-
-if __name__ == "__main__":
-    acc = Accuracy_score()
-
-    aa = (np.random.randn(100,20)>=0).astype(int)
-
-    bb = (np.random.randn(100,20)>=0).astype(int)
-
-    samp_acc, macro_acc, micro_acc = acc(aa, bb)
-
-    print(samp_acc)
-    print(macro_acc)
-    print(micro_acc)
 
 
 

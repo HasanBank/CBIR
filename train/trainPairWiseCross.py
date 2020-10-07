@@ -6,7 +6,6 @@ import os
 import numpy as np
 from datetime import datetime
 from tqdm import tqdm
-import shutil
 import time
 
 import argparse
@@ -38,7 +37,6 @@ parser.add_argument('-b', '--batch-size', default=200, type=int,
 parser.add_argument('--epochs', type=int, default=500, help='epoch number')
 parser.add_argument('--k', type=int, default=20, help='number of retrived images per query')
 parser.add_argument('--lr', default=0.001, type=float, help='initial learning rate')
-parser.add_argument('--resume', '-r', help='path to the pretrained weights file', default=None, type=str)
 parser.add_argument('--num_workers', default=8, type=int, metavar='N',
                         help='num_workers for data loading in pytorch')
 parser.add_argument('--bits', type=int, default=16, help='number of bits to use in hashing')
@@ -83,13 +81,9 @@ def write_arguments_to_file(args, filename):
         for key, value in vars(args).items():
             f.write('%s: %s\n' % (key, str(value)))
 
-def save_checkpoint(state, is_best, name):
-
+def save_checkpoint(state, name):
     filename = os.path.join(checkpoint_dir, name + '_checkpoint.pth.tar')
     torch.save(state, filename)
-    if is_best:
-        shutil.copyfile(filename, os.path.join(checkpoint_dir, name + '_model_best.pth.tar'))
-
 
 
 def get_triplets(train_labels):
@@ -161,15 +155,6 @@ def main():
     
     resultsFile_name = os.path.join(result_dir, sv_name+'_results.txt')
     
-    
-    
-    
-    
-    use_cuda = torch.cuda.is_available()
-
-    if use_cuda:
-        torch.backends.cudnn.enabled = True
-        cudnn.benchmark = True
 
     if args.serbia:
         if args.big1000:
@@ -219,15 +204,12 @@ def main():
                     'polarVV_std': [ 1.8147297]
             }
             
-            
-            
-            
-            
-            
+       
     else:
         if args.big1000 :
             
-             bands_mean = {'bands10_mean': [ 416.19177 ,  599.8206,  572.7137, 2227.16],
+             bands_mean = {
+                         'bands10_mean': [ 416.19177 ,  599.8206,  572.7137, 2227.16],
                         'bands20_mean': [ 937.8009, 1796.316, 2085.186, 2279.0896, 1606.1233, 1016.82526],
                         'bands60_mean': [ 330.60297, 2257.2668 ],
                         }
@@ -256,6 +238,21 @@ def main():
     modelS2 = ResNet50_S2(args.bits)
     
     
+    if torch.cuda.is_available():
+        torch.backends.cudnn.enabled = True
+        cudnn.benchmark = True
+        modelS1.cuda()
+        modelS2.cuda()
+        gpuDisabled = False
+    else:
+        modelS1.cpu()
+        modelS2.cpu()
+        gpuDisabled = True
+        
+    print('GPU Disabled: ',gpuDisabled)
+
+
+
     train_dataGenS1 =  dataGenBigEarthLMDB(
                     bigEarthPthLMDB=args.S1LMDBPth,
                     isSentinel2 = False,
@@ -321,59 +318,21 @@ def main():
             batch_size=args.batch_size, num_workers=args.num_workers, shuffle=False, pin_memory=True)    
     
     
-    #train_data_loader = DataLoader(train_dataGen, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=True, pin_memory=True)
-    #val_data_loader = DataLoader(val_dataGen, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=False, pin_memory=True)
 
-    if torch.cuda.is_available():
-        modelS1.cuda()
-        modelS2.cuda()
-        gpuDisabled = False
-    else:
-        modelS1.cpu()
-        modelS2.cpu()
-        gpuDisabled = True
-        
-    print('GPU Disabled: ',gpuDisabled)
-    
-    
-
-
-        
-    
-    
 
     optimizerS1 = optim.Adam(modelS1.parameters(), lr=args.lr, weight_decay=1e-4)
     optimizerS2 = optim.Adam(modelS2.parameters(), lr=args.lr, weight_decay=1e-4)
 
-    best_acc = 0
 
-    start_epoch = 0
-    if args.resume:
-        if os.path.isfile(args.resume):
-            print("=> loading checkpoint '{}'".format(args.resume))
-            checkpoint = torch.load(args.resume)
-            checkpoint_nm = os.path.basename(args.resume)
-            sv_name = checkpoint_nm.split('_')[0] + '_' + checkpoint_nm.split('_')[1]
-            print('saving file name is ', sv_name)
-
-            if checkpoint['epoch'] > start_epoch:
-                start_epoch = checkpoint['epoch']
-            best_acc = checkpoint['best_map']
-            modelS1.load_state_dict(checkpoint['state_dictS1'])
-            modelS2.load_state_dict(checkpoint['state_dictS2'])
-            optimizerS1.load_state_dict(checkpoint['optimizerS1'])
-            optimizerS2.load_state_dict(checkpoint['optimizerS2'])
-
-            print("=> loaded checkpoint '{}' (epoch {})".format(args.resume, checkpoint['epoch']))
-        else:
-            print("=> no checkpoint found at '{}'".format(args.resume))
 
     train_writer = SummaryWriter(os.path.join(logs_dir, 'runs', sv_name, 'training'))
     val_writer = SummaryWriter(os.path.join(logs_dir, 'runs', sv_name, 'val'))
 
 
     toWrite = False
- 
+    best_averageWeightedF1Score = 0
+    start_epoch = 0
+
     start = time.time()
     for epoch in range(start_epoch, args.epochs):
 
@@ -387,10 +346,9 @@ def main():
 
 
 
-
-        train(train_data_loader, modelS1,modelS2, optimizerS1,optimizerS2, epoch, use_cuda, train_writer,gpuDisabled,resultsFile_name)
+        train(train_data_loader, modelS1,modelS2, optimizerS1,optimizerS2, epoch, train_writer,gpuDisabled,resultsFile_name)
                         
-        mAP,val_S1codes,val_S2codes,label_val,name_valS1,name_valS2 = val(val_data_loader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer,gpuDisabled,resultsFile_name)
+        averageF1,val_S1codes,val_S2codes,label_val,name_valS1,name_valS2 = val(val_data_loader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer,gpuDisabled,resultsFile_name)
         
         val_S1codes = torch.stack(val_S1codes).reshape(len(val_S1codes),args.bits)
         val_S2codes = torch.stack(val_S2codes).reshape(len(val_S2codes),args.bits)
@@ -399,8 +357,8 @@ def main():
 
 
 
-        is_best_acc = mAP > best_acc
-        best_acc = max(best_acc, mAP)
+        is_best_acc = averageF1 > best_averageWeightedF1Score
+        best_averageWeightedF1Score = max(best_averageWeightedF1Score, averageF1)
         
         print('is_best_acc: ',is_best_acc)
         
@@ -408,11 +366,8 @@ def main():
                 resultsFile.write( 'Best Epoch: {}\n '.format(is_best_acc))
                 
 
-
         if is_best_acc:
-            
-
-                
+                            
             generatedS1CodesToWriteFile = []
             generatedS2CodesToWriteFile = []
             trainedLabelsToWriteFile = []
@@ -435,7 +390,7 @@ def main():
             optimizerS1ToWrite = optimizerS1.state_dict()
             optimizerS2ToWrite = optimizerS2.state_dict()
 
-            bestMapToWrite = best_acc
+            bestF1ToWrite = best_averageWeightedF1Score
             toWrite = True
 
     end = time.time()
@@ -463,7 +418,6 @@ def main():
         fileTrainedLabels = os.path.join(dataset_folder,'trainedLabels.pt')
 
 
-        
         torch.save(generatedS1CodesToWriteFile,fileGeneratedS1Codes)
         torch.save(generatedS2CodesToWriteFile,fileGeneratedS2Codes)
         
@@ -478,14 +432,14 @@ def main():
             'state_dictS2': stateS2DictToWrite,
             'optimizerS1': optimizerS1ToWrite,
             'optimizerS2': optimizerS2ToWrite,
-            'best_map': bestMapToWrite,
-        }, True,sv_name)
+            'best_map': bestF1ToWrite,
+        }, sv_name)
         
         
     
 
 
-def train(trainloader, modelS1,modelS2, optimizerS1,optimizerS2, epoch, use_cuda, train_writer,gpuDisabled,resultsFile_name):
+def train(trainloader, modelS1,modelS2, optimizerS1,optimizerS2, epoch, train_writer,gpuDisabled,resultsFile_name):
 
      
     lossTracker = MetricTracker()
@@ -495,15 +449,12 @@ def train(trainloader, modelS1,modelS2, optimizerS1,optimizerS2, epoch, use_cuda
     
     for idx, (dataS1,dataS2) in enumerate(tqdm(trainloader, desc="training")):
         numSample = dataS2["bands10"].size(0)
-        #print('Batch Size:',numSample)
         
         if not args.lossFunc == 'TripletLoss':
             lossFunc = nn.MSELoss()
             
             halfNumSample = numSample // 2
             
-            
-    
             if gpuDisabled :
                 bands1 = torch.cat((dataS2["bands10"][:halfNumSample], dataS2["bands20"][:halfNumSample],dataS2["bands60"][:halfNumSample]), dim=1).to(torch.device("cpu"))
                 polars1 = torch.cat((dataS1["polarVH"][:halfNumSample], dataS1["polarVV"][:halfNumSample]), dim=1).to(torch.device("cpu"))
@@ -517,7 +468,6 @@ def train(trainloader, modelS1,modelS2, optimizerS1,optimizerS2, epoch, use_cuda
                 
                 onesTensor = torch.ones(halfNumSample)
                 
-            
             else:
                 bands1 = torch.cat((dataS2["bands10"][:halfNumSample], dataS2["bands20"][:halfNumSample],dataS2["bands60"][:halfNumSample]), dim=1).to(torch.device("cuda"))
                 polars1 = torch.cat((dataS1["polarVH"][:halfNumSample], dataS1["polarVV"][:halfNumSample]), dim=1).to(torch.device("cuda"))
@@ -687,28 +637,13 @@ def val(valloader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer, gpuDisa
             logitsS1 = modelS1(polars)
             logitsS2 = modelS2(bands)
 
-            """
-            binaryS1 = torch.sigmoid(logitsS1)
-            binaryS2 = torch.sigmoid(logitsS2)
-        
-            
-            if gpuDisabled:
-                t = torch.Tensor([0.5])
-            else:
-                t = torch.cuda.FloatTensor(1).fill_(0.5)
-        
-            binaryS1 = (binaryS1 >= t).float()
-            binaryS2 = (binaryS2 >= t).float()
-            """
             
             binaryS1 = (torch.sign(logitsS1 - 0.5) + 1 ) / 2
             binaryS2 = (torch.sign(logitsS2 - 0.5) + 1 ) / 2
 
-
             predicted_S1codes += list(binaryS1)
             predicted_S2codes += list(binaryS2)
-            
-            
+                        
             label_val += list(labels)
             name_valS1 += list(dataS1['patchName'])
             name_valS2 += list(dataS2['patchName'])
@@ -737,10 +672,8 @@ def val(valloader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer, gpuDisa
         
         #S1 to S1
         neighboursIndices = get_k_hamming_neighbours(databaseS1, queryCodeS1)  
-        
         mapPerBatch = get_mAP(neighboursIndices,args.k,databaseLabels,queryLabel)
         mapS1toS1 += mapPerBatch
-        
         precisionPerQuery, recallPerQuery, precisionPerQuery_weighted, recallPerQuery_weighted = get_average_precision_recall(neighboursIndices, args.k, databaseLabels, queryLabel)
         mapS1toS1_precision += precisionPerQuery
         mapS1toS1_precision_weighted += precisionPerQuery_weighted
@@ -749,10 +682,8 @@ def val(valloader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer, gpuDisa
         
         #S1 to S2
         neighboursIndices = get_k_hamming_neighbours(databaseS2,queryCodeS1)  
-        
         mapPerBatch = get_mAP(neighboursIndices,args.k,databaseLabels,queryLabel)
         mapS1toS2 += mapPerBatch
-        
         precisionPerQuery, recallPerQuery, precisionPerQuery_weighted, recallPerQuery_weighted = get_average_precision_recall(neighboursIndices, args.k, databaseLabels, queryLabel)
         mapS1toS2_precision += precisionPerQuery
         mapS1toS2_precision_weighted += precisionPerQuery_weighted
@@ -763,10 +694,8 @@ def val(valloader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer, gpuDisa
             
         #S2 to S1
         neighboursIndices = get_k_hamming_neighbours(databaseS1,queryCodeS2)  
-        
         mapPerBatch = get_mAP(neighboursIndices,args.k,databaseLabels,queryLabel)
         mapS2toS1 += mapPerBatch
-
         precisionPerQuery, recallPerQuery,precisionPerQuery_weighted,recallPerQuery_weighted = get_average_precision_recall(neighboursIndices, args.k, databaseLabels, queryLabel)
         mapS2toS1_precision += precisionPerQuery
         mapS2toS1_precision_weighted += precisionPerQuery_weighted
@@ -791,9 +720,8 @@ def val(valloader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer, gpuDisa
     mapS1toS2 = calculateAverageMetric(mapS1toS2,totalSize)
     mapS2toS1 = calculateAverageMetric(mapS2toS1,totalSize)
     mapS2toS2 = calculateAverageMetric(mapS2toS2,totalSize)
+    averageMap = (mapS1toS1 + mapS1toS2 + mapS2toS1 + mapS2toS2 ) / 4   
     
-
-
 
 
     f1S1toS1,f1S1toS1_weighted = printResultsAndGetF1Scores(mapS1toS1_precision,mapS1toS1_precision_weighted,mapS1toS1_recall,mapS1toS1_recall_weighted,'S1','S1',totalSize,resultsFile_name)
@@ -808,14 +736,12 @@ def val(valloader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer, gpuDisa
     print('Average F1-Score @',args.k,':{0}'.format(averageF1Score))
     print('Average Weighted F1-Score @',args.k,':{0}'.format(averageF1Score_weighted))
 
-    
+    print('# Roy mAP Calculations #')
     print('MaP for S1 to S1: ', mapS1toS1)
     print('MaP for S1 to S2: ', mapS1toS2)
     print('MaP for S2 to S1: ', mapS2toS1)
     print('MaP for S2 to S2: ', mapS2toS2)
-
-    averageMap = (mapS1toS1 + mapS1toS2 + mapS2toS1 + mapS2toS2 ) / 4           
-    print('mAP@',args.k,':{0}'.format(averageMap))
+    print('Average mAP@',args.k,':{0}'.format(averageMap))
     
     
     with open(resultsFile_name, 'a') as resultsFile:
@@ -831,21 +757,6 @@ def val(valloader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer, gpuDisa
     return (averageF1Score_weighted,predicted_S1codes,predicted_S2codes,label_val,name_valS1,name_valS2)
     
     
-
-    
-    '''
-    return (averageMap,predicted_S1codes,predicted_S2codes,label_val,name_valS1,name_valS2)
-    '''
-
-
-
-
-
-
-
-
-
-
 
 if __name__ == "__main__":
     main()

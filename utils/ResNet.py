@@ -1,11 +1,7 @@
 
-import os
-import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.nn.init as init
-from torch.autograd import Function
 from torchvision import models
 
 
@@ -130,7 +126,6 @@ class ResNet50_S1(nn.Module):
         super().__init__()
 
         resnet = models.resnet50(pretrained=False)
-
         self.conv1 = nn.Conv2d(2, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
         self.encoder = nn.Sequential(
             self.conv1,
@@ -144,8 +139,6 @@ class ResNet50_S1(nn.Module):
             resnet.avgpool
         )
         self.FC = nn.Linear(2048, bits)
-
-
         self.apply(weights_init_kaiming)
         self.apply(fc_init_weights)
 
@@ -154,15 +147,16 @@ class ResNet50_S1(nn.Module):
         x = x.view(x.size(0), -1)
 
         logits = self.FC(x)
+        m = nn.Sigmoid()
+        logits0_1 = m(logits)
 
-        return logits  
+        return logits0_1  
     
 class ResNet50_S2(nn.Module):
     def __init__(self, bits = 16):
         super().__init__()
 
         resnet = models.resnet50(pretrained=False)
-
         self.conv1 = nn.Conv2d(12, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
         self.encoder = nn.Sequential(
             self.conv1,
@@ -176,8 +170,6 @@ class ResNet50_S2(nn.Module):
             resnet.avgpool
         )
         self.FC = nn.Linear(2048, bits)
-
-
         self.apply(weights_init_kaiming)
         self.apply(fc_init_weights)
 
@@ -186,8 +178,10 @@ class ResNet50_S2(nn.Module):
         x = x.view(x.size(0), -1)
 
         logits = self.FC(x)
+        m = nn.Sigmoid()
+        logits0_1 = m(logits)
 
-        return logits       
+        return logits0_1      
     
     
     

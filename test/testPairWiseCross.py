@@ -1,24 +1,18 @@
-# -*- coding: utf-8 -*-
 #
-# This script can be used to train any deep learning model on the BigEarthNet.
-#
-# To run the code, you need to provide a json file for configurations of the training.
-#
-# Author: Jian Kang, https://www.rsim.tu-berlin.de/menue/team/dring_jian_kang/
-# Email: jian.kang@tu-berlin.de
+# Author: Hasan Bank
+# Email: hasanbank@gmail.com
 
 import os
-import random
-import math
 import numpy as np
 import time
-from datetime import datetime
 from tqdm import tqdm
-import shutil
-
-
 import argparse
+import torch
+import torchvision.transforms as transforms
+from torch.utils.data import DataLoader
+import torch.backends.cudnn as cudnn
 
+import sys
 
 parser = argparse.ArgumentParser(description='PyTorch multi-label classification for testing pairwise')
     
@@ -26,6 +20,9 @@ parser.add_argument('--S1LMDBPth', metavar='DATA_DIR',
                         help='path to the saved sentinel 1 LMDB dataset')
 parser.add_argument('--S2LMDBPth', metavar='DATA_DIR',
                         help='path to the saved sentinel 2 LMDB dataset')
+parser.add_argument('--S1Dir', metavar='DATA_DIR', help='path which has Sentinel-1 patches')
+parser.add_argument('--S2Dir',metavar='DATA_DIR', help='path which has Sentinel-2 patches')
+
 parser.add_argument('-b', '--batch-size', default=200, type=int,
                         metavar='N', help='mini-batch size (default: 256)')
 parser.add_argument('--bits', type=int, default=16, help='number of bits to use in hashing')
@@ -48,20 +45,17 @@ parser.add_argument('--serbia', dest='serbia', action='store_true',
     
 arguments = parser.parse_args()
 
+result_dir = os.path.join(arguments.dataset,'testResults')
 
-import torch
-import torch.optim as optim
-import torchvision.transforms as transforms
-from torch.utils.data import DataLoader
-import torch.backends.cudnn as cudnn
+if not os.path.isdir(result_dir):
+    os.makedirs(result_dir)
 
 
-import sys
 sys.path.append('../')
 
 from utils.dataGenBigEarth import dataGenBigEarthLMDB, ToTensor, Normalize, ConcatDataset
-from utils.metrics import get_mAP, get_k_hamming_neighbours, Recall_score, F1_score, F2_score, Hamming_loss, Subset_accuracy, \
-    Accuracy_score, One_error, Coverage_error, Ranking_loss, LabelAvgPrec_score, calssification_report
+from utils.metrics import get_mAP, get_k_hamming_neighbours,timer, get_average_precision_recall,\
+    createTrueColorTiff, falseRepresentationS1, calculateAverageMetric,lineWriteToFile,printResultsAndGetF1Scores
 
 from utils.ResNet import ResNet50_S1, ResNet50_S2
 
@@ -175,8 +169,19 @@ def main():
             bands_std = {
                             'bands10_std': [ 315.86624,  305.07462,  302.11145, 310.93375],
                             'bands20_std': [ 288.43314, 287.29364, 299.83383, 295.51282, 211.81876,  193.92213],
-                            'bands60_std': [ 267.79263, 292.94092 ]
+                            'bands60_std': [ 267.79263, 292.94092 ]    
                     }
+            
+            #Sentinel 1 in Serbia Statistics
+            polars_mean = {
+                    'polarVH_mean': [ -15.827944 ],
+                    'polarVV_mean': [ -9.317011]
+                }
+
+            polars_std = {
+                    'polarVH_std': [ 0.782826 ],
+                    'polarVV_std': [ 1.8147297]
+            }
     else:
         if arguments.big1000 :
             
@@ -246,13 +251,15 @@ def main():
         modelS1.cuda()
         modelS2.cuda()
         gpuDisabled = False
+        map_location=lambda storage, loc: storage.cuda()
     else:
         modelS1.cpu()
         modelS2.cpu()
         gpuDisabled = True
+        map_location='cpu'
 
     checkpointPath = arguments.checkpoint_pth
-    checkpoint = torch.load(checkpointPath)
+    checkpoint = torch.load(checkpointPath, map_location=map_location)
     
     modelS1.load_state_dict(checkpoint['state_dictS1'])
     modelS2.load_state_dict(checkpoint['state_dictS2'])
@@ -270,11 +277,11 @@ def main():
     fileGeneratedS2Codes = os.path.join(dataset, 'generatedS2Codes.pt')
     
         
-    trainedLabels = torch.load(trainedLabelsDir)
+    trainedLabels = torch.load(trainedLabelsDir, map_location=map_location)
     trainedS1FileNames = np.load(fileTrainedS1Names)
     trainedS2FileNames = np.load(fileTrainedS2Names)
-    trainedAndGeneratedS1Codes = torch.load(fileGeneratedS1Codes)
-    trainedAndGeneratedS2Codes = torch.load(fileGeneratedS2Codes)
+    trainedAndGeneratedS1Codes = torch.load(fileGeneratedS1Codes, map_location=map_location)
+    trainedAndGeneratedS2Codes = torch.load(fileGeneratedS2Codes, map_location=map_location)
 
 
 
@@ -293,10 +300,40 @@ def main():
     mapS2toS1 = 0
     mapS2toS2 = 0
     
-    totalSize = 0 
+    mapS1toS1_precision = 0 
+    mapS1toS1_precision_weighted = 0 
+
+    mapS1toS1_recall = 0 
+    mapS1toS1_recall_weighted = 0 
     
 
+    mapS1toS2_precision = 0 
+    mapS1toS2_precision_weighted = 0 
 
+    mapS1toS2_recall = 0 
+    mapS1toS2_recall_weighted = 0 
+
+
+    mapS2toS1_precision = 0 
+    mapS2toS1_precision_weighted = 0 
+
+    mapS2toS1_recall = 0 
+    mapS2toS1_recall_weighted = 0 
+
+    
+    mapS2toS2_precision = 0 
+    mapS2toS2_precision_weighted = 0 
+    
+    mapS2toS2_recall = 0 
+    mapS2toS2_recall_weighted = 0 
+    
+    
+    totalSize = 0 
+    
+    resultsFile_name = os.path.join(result_dir, 'Testresults.txt')
+    
+    
+    start = time.time()
     with torch.no_grad():
         for batch_idx, (dataS1,dataS2) in enumerate(tqdm(test_data_loader, desc="test")):
             totalSize += dataS2["bands10"].size(0)
@@ -315,12 +352,9 @@ def main():
             logitsS1 = modelS1(polars)
             logitsS2 = modelS2(bands)
             
-            binaryS1 = torch.sigmoid(logitsS1)
-            binaryS2 = torch.sigmoid(logitsS2)
-        
-            t = torch.Tensor([0.5])
-            binaryS1 = (binaryS1 > t).float()
-            binaryS2 = (binaryS2 > t).float()
+            
+            binaryS1 = (torch.sign(logitsS1 - 0.5) + 1 ) / 2
+            binaryS2 = (torch.sign(logitsS2 - 0.5) + 1 ) / 2
             
             
                         
@@ -336,110 +370,176 @@ def main():
             mapPerBatch = get_mAP(neighboursIndices,arguments.k,trainedLabels,list(labels))
             mapS1toS1 += mapPerBatch
             
+            precisionBulk, recallBulk, precisionBulk_weighted, recallBulk_weighted = get_average_precision_recall(neighboursIndices, arguments.k, trainedLabels, list(labels))
+            mapS1toS1_precision += precisionBulk
+            mapS1toS1_precision_weighted += precisionBulk_weighted
+            mapS1toS1_recall += recallBulk
+            mapS1toS1_recall_weighted += recallBulk_weighted
+            
+            
             #S1 to S2
             neighboursIndices = get_k_hamming_neighbours(trainedAndGeneratedS2Codes,binaryS1)  
             mapPerBatch = get_mAP(neighboursIndices,arguments.k,trainedLabels,list(labels))
             mapS1toS2 += mapPerBatch
             
+            precisionBulk, recallBulk, precisionBulk_weighted, recallBulk_weighted = get_average_precision_recall(neighboursIndices, arguments.k, trainedLabels, list(labels))
+            mapS1toS2_precision += precisionBulk
+            mapS1toS2_precision_weighted += precisionBulk_weighted
+            mapS1toS2_recall += recallBulk
+            mapS1toS2_recall_weighted += recallBulk_weighted
+            
+            
             #S2 to S1
             neighboursIndices = get_k_hamming_neighbours(trainedAndGeneratedS1Codes,binaryS2)  
             mapPerBatch = get_mAP(neighboursIndices,arguments.k,trainedLabels,list(labels))
             mapS2toS1 += mapPerBatch
+            
+            precisionBulk, recallBulk, precisionBulk_weighted, recallBulk_weighted = get_average_precision_recall(neighboursIndices, arguments.k, trainedLabels, list(labels))
+            mapS2toS1_precision += precisionBulk
+            mapS2toS1_precision_weighted += precisionBulk_weighted
+            mapS2toS1_recall += recallBulk
+            mapS2toS1_recall_weighted += recallBulk_weighted
                   
             #S2 to S2
             neighboursIndices = get_k_hamming_neighbours(trainedAndGeneratedS2Codes, binaryS2)  
             mapPerBatch = get_mAP(neighboursIndices,arguments.k,trainedLabels,list(labels))
             mapS2toS2 += mapPerBatch
             
+            precisionBulk, recallBulk, precisionBulk_weighted, recallBulk_weighted = get_average_precision_recall(neighboursIndices, arguments.k, trainedLabels, list(labels))
+            mapS2toS2_precision += precisionBulk
+            mapS2toS2_precision_weighted += precisionBulk_weighted
+            mapS2toS2_recall += recallBulk
+            mapS2toS2_recall_weighted += recallBulk_weighted
+            
 
-    print('Total Test Size: ',totalSize)
-    mapS1toS1 = mapS1toS1 / totalSize * 100
-    mapS1toS2 = mapS1toS2 / totalSize * 100
-    mapS2toS1 = mapS2toS1 / totalSize * 100
-    mapS2toS2 = mapS2toS2 / totalSize * 100
+    end = time.time()
+    
+    lineToWriteFile_list = []
+    
+    line = 'Test Time has been elapsed: {}'.format(timer(start,end))
+    print(line)
+    lineToWriteFile_list.append(line)
+       
+    line = 'Total Test Size: {} '.format(totalSize)
+    print(line)
+    lineToWriteFile_list.append(line)    
+    lineWriteToFile(resultsFile_name,lineToWriteFile_list)
+    
+    
+    f1S1toS1,f1S1toS1_weighted = printResultsAndGetF1Scores(mapS1toS1_precision,mapS1toS1_precision_weighted,mapS1toS1_recall,mapS1toS1_recall_weighted,'S1','S1',totalSize,resultsFile_name)
+    f1S1toS2,f1S1toS2_weighted = printResultsAndGetF1Scores(mapS1toS2_precision,mapS1toS2_precision_weighted,mapS1toS2_recall,mapS1toS2_recall_weighted,'S1','S2',totalSize,resultsFile_name)
+    f1S2toS1,f1S2toS1_weighted = printResultsAndGetF1Scores(mapS2toS1_precision,mapS2toS1_precision_weighted,mapS2toS1_recall,mapS2toS1_recall_weighted,'S2','S1',totalSize,resultsFile_name)
+    f1S2toS2,f1S2toS2_weighted = printResultsAndGetF1Scores(mapS2toS2_precision,mapS2toS2_precision_weighted,mapS2toS2_recall,mapS2toS2_recall_weighted,'S2','S2',totalSize,resultsFile_name)
 
+    
+    averageF1Score = (f1S1toS1+f1S1toS2+f1S2toS1+f1S2toS2) / 4
+    averageF1Score_weighted = (f1S1toS1_weighted+f1S1toS2_weighted+f1S2toS1_weighted+f1S2toS2_weighted) / 4
+    
+    
+    mapS1toS1 = calculateAverageMetric(mapS1toS1,totalSize)
+    mapS1toS2 = calculateAverageMetric(mapS1toS2,totalSize)
+    mapS2toS1 = calculateAverageMetric(mapS2toS1,totalSize)
+    mapS2toS2 = calculateAverageMetric(mapS2toS2,totalSize)
+    averageMap = (mapS1toS1 + mapS1toS2 + mapS2toS1 + mapS2toS2 ) / 4 
+    
+    
+    
+    print('Average F1-Score @',arguments.k,':{0}'.format(averageF1Score))
+    print('Average Weighted F1-Score @',arguments.k,':{0}'.format(averageF1Score_weighted))
+    print('# Roy mAP Calculations #')
     print('MaP for S1 to S1: ', mapS1toS1)
     print('MaP for S1 to S2: ', mapS1toS2)
     print('MaP for S2 to S1: ', mapS2toS1)
     print('MaP for S2 to S2: ', mapS2toS2)
+    print('Average mAP@',arguments.k,':{}'.format(averageMap))
+    
+    
+    with open(resultsFile_name, 'a') as resultsFile:
+         resultsFile.write('Average F1-Score @{}:{}\n'.format(arguments.k,averageF1Score))
+         resultsFile.write('Average Weighted F1-Score @{}:{}\n'.format(arguments.k,averageF1Score_weighted))
+         resultsFile.write('# Roy mAP Calculations #\n')
+         resultsFile.write("mAP S1-S1: {}\n ".format(mapS1toS1))
+         resultsFile.write("mAP S1-S2: {}\n ".format(mapS1toS2))
+         resultsFile.write("mAP S2-S1: {}\n ".format(mapS2toS1))
+         resultsFile.write("mAP S2-S2: {}\n f".format(mapS2toS2))
+         resultsFile.write("Average mAP@{}: {}\n ".format(arguments.k, averageMap))
 
-
-
-    averageMap = (mapS1toS1 + mapS1toS2 + mapS2toS1 + mapS2toS2 ) / 4
-                   
-    print('mAP@',arguments.k,':{0}'.format(averageMap))
     
         
     #An Example
-    print('Testing S1 File Name: ', name_testS1[0])
-    print('Testing Image Label Encoding: ', label_test[0])
     
+    line = "Testing S1 File Name: {}".format(name_testS1[0])
+    print(line)
+    falseRepresentationS1(arguments.S1Dir, name_testS1[0], os.path.join(result_dir,'testS1.tif'))
     
-    #S1 to S1
-    neighboursIndices = get_k_hamming_neighbours(trainedAndGeneratedS1Codes, test_S1codes[0].reshape(1,-1))  
-    firstImageIndex = neighboursIndices[0][0]
-    secondIamgeIndex = neighboursIndices[0][1]
+    line = 'Testing S2 File Name: {}'.format(name_testS2[0])
+    print(line)
+    createTrueColorTiff(arguments.S2Dir, name_testS2[0], os.path.join(result_dir,'testS2.tif'))
+    
 
-    print('#S1 to S1#')
-    print('First Retrived S1 File Index: ', firstImageIndex)    
-    print('First Retrived File Name: ',trainedS1FileNames[firstImageIndex])
-    print('First Retrived Image Labels: ', trainedLabels[firstImageIndex])
+    line = 'Testing Image Label Encoding: {}'.format(label_test[0])
+    print(line)
+    lineWriteToFile(resultsFile_name,lineToWriteFile_list)
     
-    print('Second Retrived File Index: ',secondIamgeIndex)
-    print('Second Retrived File Name: ',trainedS1FileNames[secondIamgeIndex])
-    print('Second Retrived Image Labels: ', trainedLabels[secondIamgeIndex])
-    
-    #S1 to S2
-    neighboursIndices = get_k_hamming_neighbours(trainedAndGeneratedS2Codes, test_S1codes[0].reshape(1,-1))  
-    #neighboursIndices = get_k_hamming_neighbours(arguments.k,trainedAndGeneratedS2Codes,trainedLabels,trainedS2FileNames, list(test_S1codes[0].reshape(1,-1)), list(label_test[0]),list(name_testS1[0]),arguments.bits )  
-    firstImageIndex = neighboursIndices[0][0]
-    secondIamgeIndex = neighboursIndices[0][1]
 
-    print('#S1 to S2#')
-    print('First Retrived S1 File Index: ', firstImageIndex)    
-    print('First Retrived File Name: ',trainedS2FileNames[firstImageIndex])
-    print('First Retrived Image Labels: ', trainedLabels[firstImageIndex])
-    
-    print('Second Retrived File Index: ',secondIamgeIndex)
-    print('Second Retrived File Name: ',trainedS2FileNames[secondIamgeIndex])
-    print('Second Retrived Image Labels: ', trainedLabels[secondIamgeIndex])
-    
-    
-    print('### Testing S2 File Name:  ### ', name_testS2[0])
-    print('Testing Image Label Encoding: ', label_test[0])
-    
-    
-    #S2 to S1
-    neighboursIndices = get_k_hamming_neighbours(trainedAndGeneratedS1Codes, test_S2codes[0].reshape(1,-1))  
-    #neighboursIndices = get_k_hamming_neighbours(arguments.k,trainedAndGeneratedS1Codes,trainedLabels,trainedS1FileNames, list(test_S2codes[0].reshape(1,-1)), list(label_test[0]),list(name_testS2[0]),arguments.bits )  
-    firstImageIndex = neighboursIndices[0][0]
-    secondIamgeIndex = neighboursIndices[0][1]
 
-    print('#S2 to S1#')
-    print('First Retrived S1 File Index: ', firstImageIndex)    
-    print('First Retrived File Name: ',trainedS1FileNames[firstImageIndex])
-    print('First Retrived Image Labels: ', trainedLabels[firstImageIndex])
-    
-    print('Second Retrived File Index: ',secondIamgeIndex)
-    print('Second Retrived File Name: ',trainedS1FileNames[secondIamgeIndex])
-    print('Second Retrived Image Labels: ', trainedLabels[secondIamgeIndex])
-    
-    #S2 to S2
-    neighboursIndices = get_k_hamming_neighbours(trainedAndGeneratedS2Codes, test_S2codes[0].reshape(1,-1))  
-    #neighboursIndices = get_k_hamming_neighbours(arguments.k,trainedAndGeneratedS2Codes,trainedLabels,trainedS2FileNames, list(test_S2codes[0].reshape(1,-1)), list(label_test[0]),list(name_testS2[0]),arguments.bits )  
-    firstImageIndex = neighboursIndices[0][0]
-    secondIamgeIndex = neighboursIndices[0][1]
+    neighboursIndicesS1toS1 = get_k_hamming_neighbours(trainedAndGeneratedS1Codes, test_S1codes[0].reshape(1,-1)) 
+    neighboursIndicesS1toS2 = get_k_hamming_neighbours(trainedAndGeneratedS2Codes, test_S1codes[0].reshape(1,-1)) 
+    neighboursIndicesS2toS1 = get_k_hamming_neighbours(trainedAndGeneratedS1Codes, test_S2codes[0].reshape(1,-1)) 
+    neighboursIndicesS2toS2 = get_k_hamming_neighbours(trainedAndGeneratedS2Codes, test_S2codes[0].reshape(1,-1)) 
 
-    print('#S2 to S2#')
-    print('First Retrived S1 File Index: ', firstImageIndex)    
-    print('First Retrived File Name: ',trainedS2FileNames[firstImageIndex])
-    print('First Retrived Image Labels: ', trainedLabels[firstImageIndex])
+
     
-    print('Second Retrived File Index: ',secondIamgeIndex)
-    print('Second Retrived File Name: ',trainedS2FileNames[secondIamgeIndex])
-    print('Second Retrived Image Labels: ', trainedLabels[secondIamgeIndex])
+    for i in range(arguments.k):
+        line = '### {}.Retriving ### '.format(i+1)
+        print(line)
+        
+        s1toS1Index = neighboursIndicesS1toS1[0][i]
+        s1toS2Index = neighboursIndicesS1toS2[0][i]
+        s2toS1Index = neighboursIndicesS2toS1[0][i]
+        s2toS2Index = neighboursIndicesS2toS2[0][i]
+        
+        line = 'S1-S1 Retrived File Name: {} '.format(trainedS1FileNames[s1toS1Index])
+        print(line)
+        falseRepresentationS1(arguments.S1Dir, trainedS1FileNames[s1toS1Index], os.path.join(result_dir,'S1-S1_{}.tif'.format(i)))
+        s2FileName = trainedS1FileNames[s1toS1Index].replace('S1_','')
+        createTrueColorTiff(arguments.S2Dir, s2FileName, os.path.join(result_dir,'S1-S1_S2{}.tif'.format(i)))        
+        print('S1-S1 Retrived File Label: ',trainedLabels[s1toS1Index] )
+        printTotalNumberOfClasses(trainedLabels[s1toS1Index])
+        printSharedNumberOfClasses(label_test[0],trainedLabels[s1toS1Index])
+        
+        
+        print('S1-S2 Retrived File Name: ',trainedS2FileNames[s1toS2Index] )
+        createTrueColorTiff(arguments.S2Dir, trainedS2FileNames[s1toS2Index], os.path.join(result_dir,'S1-S2_{}.tif'.format(i)))        
+        print('S1-S2 Retrived File Label: ',trainedLabels[s1toS2Index] )
+        printTotalNumberOfClasses(trainedLabels[s1toS2Index])
+        printSharedNumberOfClasses(label_test[0],trainedLabels[s1toS2Index])
+
+
+        print('S2-S1 Retrived File Name: ',trainedS1FileNames[s2toS1Index] )
+        falseRepresentationS1(arguments.S1Dir, trainedS1FileNames[s2toS1Index], os.path.join(result_dir,'S2-S1_{}.tif'.format(i)))
+        s2FileName = trainedS1FileNames[s2toS1Index].replace('S1_','')
+        createTrueColorTiff(arguments.S2Dir, s2FileName, os.path.join(result_dir,'S2-S1_S2{}.tif'.format(i)))        
+        print('S2-S1 Retrived File Label: ',trainedLabels[s2toS1Index] )
+        printTotalNumberOfClasses(trainedLabels[s2toS1Index])
+        printSharedNumberOfClasses(label_test[0],trainedLabels[s2toS1Index])
+
+
+        print('S2-S2 Retrived File Name: ',trainedS2FileNames[s2toS2Index] )
+        createTrueColorTiff(arguments.S2Dir, trainedS2FileNames[s2toS2Index], os.path.join(result_dir,'S2-S2_{}.tif'.format(i)))        
+        print('S2-S2 Retrived File Label: ',trainedLabels[s2toS2Index] )
+        printTotalNumberOfClasses(trainedLabels[s2toS2Index])
+        printSharedNumberOfClasses(label_test[0],trainedLabels[s2toS2Index])
+
+            
+        
     
-    
+def printTotalNumberOfClasses(tensor):
+        ones = (tensor == 1.).sum(dim=0)
+        print('Number of Classes: ', ones)
+        
+def printSharedNumberOfClasses(tensor1,tensor2):
+        print('Shared Number of Classes: ', torch.sum(torch.mul(tensor1,tensor2))   )
     
 
 if __name__ == "__main__":

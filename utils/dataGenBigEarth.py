@@ -1,16 +1,9 @@
-
-
-import os
 import csv
-import json
-from collections import defaultdict
 import numpy as np
-from tqdm import tqdm
 import lmdb
 import pyarrow as pa
 import torch
 from skimage.transform import resize
-import pdb
 
 def interp_band(bands, img10_shape=[120,120]):
     """ 
