@@ -40,9 +40,6 @@ parser.add_argument('--lr', default=0.001, type=float, help='initial learning ra
 parser.add_argument('--num_workers', default=8, type=int, metavar='N',
                         help='num_workers for data loading in pytorch')
 parser.add_argument('--bits', type=int, default=16, help='number of bits to use in hashing')
-parser.add_argument('--BigEarthNet19', dest='BigEarthNet19', action='store_true',
-                    help='use the BigEarthNet19 class nomenclature')
-parser.add_argument('--big1000', dest='big1000', action='store_true', help='for small dataset')
 parser.add_argument('--serbia', dest='serbia', action='store_true',
                     help='use the serbia patches')
 parser.add_argument('--train_csvS1', metavar='CSV_PTH',
@@ -157,30 +154,7 @@ def main():
     
 
     if args.serbia:
-        if args.big1000:
-            #Sentinel-1 Serbia Small Set Statistics
-            polars_mean = {
-                    'polarVH_mean': [ -15.841419 ],
-                    'polarVV_mean': [ -9.30693]
-                }
 
-            polars_std = {
-                    'polarVH_std': [ 0.77528906 ],
-                    'polarVV_std': [ 1.7330942]
-            }
-            #Sentinel-2 Serbia Small Set Statistics
-            bands_mean = {
-                        'bands10_mean': [ 444.81293 ,  661.15625, 651.9382, 2561.2258 ],
-                        'bands20_mean': [ 1049.933, 2040.9866, 2402.629, 2614.475, 1999.8666, 1312.8848 ],
-                        'bands60_mean': [ 323.30414, 2598.8064 ],
-                    }
-    
-            bands_std = {
-                        'bands10_std': [ 287.76907, 275.67145, 274.22473, 288.70212 ],
-                        'bands20_std': [ 259.82077, 261.15186, 277.17377, 275.40338, 212.71072, 186.5235 ],
-                        'bands60_std': [ 248.35155, 279.67813 ]
-                }
-        else:
             #Sentinel 2 in Serbia Statistics
             bands_mean = {
                             'bands10_mean': [ 458.93423 ,  676.8278,  665.719, 2590.4482],
@@ -206,29 +180,17 @@ def main():
             
        
     else:
-        if args.big1000 :
-            
-             bands_mean = {
-                         'bands10_mean': [ 416.19177 ,  599.8206,  572.7137, 2227.16],
-                        'bands20_mean': [ 937.8009, 1796.316, 2085.186, 2279.0896, 1606.1233, 1016.82526],
-                        'bands60_mean': [ 330.60297, 2257.2668 ],
-                        }
-             bands_std = {
-                        'bands10_std': [ 300.9185, 292.4436, 319.7186, 437.5927],
-                        'bands20_std': [ 311.32214, 364.91702, 402.91406, 413.4657, 249.48933, 238.40024],
-                        'bands60_std': [ 260.72678, 364.29974 ]
-                        }
-        else:
-                bands_mean = {
-                        'bands10_mean': [ 429.9430203 ,  614.21682446,  590.23569706, 2218.94553375],
-                        'bands20_mean': [ 950.68368468, 1792.46290469, 2075.46795189, 2266.46036911, 1594.42694882, 1009.32729131],
-                        'bands60_mean': [ 340.76769064, 2246.0605464 ],
+
+        bands_mean = {
+                'bands10_mean': [ 429.9430203 ,  614.21682446,  590.23569706, 2218.94553375],
+                'bands20_mean': [ 950.68368468, 1792.46290469, 2075.46795189, 2266.46036911, 1594.42694882, 1009.32729131],
+                'bands60_mean': [ 340.76769064, 2246.0605464 ],
                     }
     
-                bands_std = {
-                        'bands10_std': [ 572.41639287,  582.87945694,  675.88746967, 1365.45589904],
-                        'bands20_std': [ 729.89827633, 1096.01480586, 1273.45393088, 1356.13789355, 1079.19066363,  818.86747235],
-                        'bands60_std': [ 554.81258967, 1302.3292881 ]
+        bands_std = {
+                'bands10_std': [ 572.41639287,  582.87945694,  675.88746967, 1365.45589904],
+                'bands20_std': [ 729.89827633, 1096.01480586, 1273.45393088, 1356.13789355, 1079.19066363,  818.86747235],
+                'bands60_std': [ 554.81258967, 1302.3292881 ]
                     }
                 
                 
