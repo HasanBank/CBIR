@@ -113,6 +113,23 @@ def pushLoss(logitS1, logitS2):
     averageError = (errorS1 + errorS2) / 2
     return torch.mean(averageError)
     
+def pushLossInMSE(logitS1_1,logitS1_2, logitS2_1, logitS2_2):
+    lossDifference = torch.nn.L1Loss(reduction='none')
+    TensorThreshold = torch.ones_like(logitS1_1) * 0.5
+        
+    errorS1_1 = torch.sum( lossDifference(logitS1_1,TensorThreshold) ** 2, 1, True  )      
+    errorS1_2 = torch.sum( lossDifference(logitS1_2,TensorThreshold) ** 2, 1, True  )
+    
+    errorS2_1 = torch.sum( lossDifference(logitS2_1,TensorThreshold) ** 2, 1, True  ) 
+    errorS2_2 = torch.sum( lossDifference(logitS2_2,TensorThreshold) ** 2, 1, True  ) 
+
+
+    averageError = (errorS1_1 + errorS1_2 + errorS2_1 + errorS2_2) / 4
+    return torch.mean(averageError)
+
+
+
+
     
 def balancingLoss(logitS1, logitS2):    
     
@@ -128,6 +145,29 @@ def balancingLoss(logitS1, logitS2):
     
     averageError = (errorS1 + errorS2) / 2
     return torch.mean(averageError)
+    
+
+def balancingLossInMSE(logitS1_1,logitS1_2, logitS2_1, logitS2_2):
+    lossDifference = torch.nn.L1Loss(reduction='none')
+    
+    meanS1_1 = torch.mean(logitS1_1,1,True)
+    meanS1_2 = torch.mean(logitS1_2,1,True)
+
+    meanS2_1 = torch.mean(logitS2_1,1,True)
+    meanS2_2 = torch.mean(logitS2_2,1,True)
+
+    
+    tensorThreshold = torch.ones_like(meanS1_1) * 0.5
+    
+    errorS1_1 = lossDifference(meanS1_1,tensorThreshold) **2   
+    errorS1_2 = lossDifference(meanS1_2,tensorThreshold) **2   
+
+    errorS2_1 = lossDifference(meanS2_1,tensorThreshold) **2   
+    errorS2_2 = lossDifference(meanS2_2,tensorThreshold) **2
+    
+    averageError = (errorS1_1 + errorS1_2 + errorS2_1 + errorS2_2 ) / 4
+    return torch.mean(averageError)
+    
     
     
 
@@ -478,8 +518,17 @@ def train(trainloader, modelS1,modelS2, optimizerS1,optimizerS2, epoch, train_wr
             InterLoss_DifLabel1 = lossFunc(cosInterDifLabel1,cosBetweenLabels)
             InterLoss_DifLabel2 = lossFunc(cosInterDifLabel2,cosBetweenLabels)
             
-            loss = 0.33 * S1IntraLoss + 0.33 * S2IntraLoss + 0.0825 * InterLoss_SameLabel1 + 0.0825 *  InterLoss_SameLabel2 + 0.0825 * InterLoss_DifLabel1 * 0.0825 * InterLoss_DifLabel2
+            mseLoss = 0.33 * S1IntraLoss + 0.33 * S2IntraLoss + 0.0825 * InterLoss_SameLabel1 + 0.0825 *  InterLoss_SameLabel2 + 0.0825 * InterLoss_DifLabel1 * 0.0825 * InterLoss_DifLabel2
         
+            
+            pushLossValue = pushLossInMSE(logitsS1_1, logitsS1_2, logitsS2_1, logitsS2_2)
+            balancingLossValue = balancingLossInMSE(logitsS1_1, logitsS1_2, logitsS2_1, logitsS2_2)
+            
+            loss = mseLoss - beta * pushLossValue / args.bits + gamma * balancingLossValue
+            
+       
+        
+       
         else:
             if gpuDisabled :
                 bands = torch.cat((dataS2["bands10"], dataS2["bands20"],dataS2["bands60"]), dim=1).to(torch.device("cpu"))
