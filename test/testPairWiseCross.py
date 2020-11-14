@@ -53,7 +53,7 @@ if not os.path.isdir(result_dir):
 sys.path.append('../')
 
 from utils.dataGenBigEarth import dataGenBigEarthLMDB, ToTensor, Normalize, ConcatDataset
-from utils.metrics import get_mAP, get_k_hamming_neighbours,timer, get_average_precision_recall,\
+from utils.metrics import get_mAP, get_k_hamming_neighbours,timer, get_mAP_weighted,\
     createTrueColorTiff, falseRepresentationS1, calculateAverageMetric,lineWriteToFile,printResultsAndGetF1Scores
 
 from utils.ResNet import ResNet50_S1, ResNet50_S2
@@ -265,33 +265,10 @@ def main():
     mapS2toS1 = 0
     mapS2toS2 = 0
     
-    mapS1toS1_precision = 0 
-    mapS1toS1_precision_weighted = 0 
-
-    mapS1toS1_recall = 0 
-    mapS1toS1_recall_weighted = 0 
-    
-
-    mapS1toS2_precision = 0 
-    mapS1toS2_precision_weighted = 0 
-
-    mapS1toS2_recall = 0 
-    mapS1toS2_recall_weighted = 0 
-
-
-    mapS2toS1_precision = 0 
-    mapS2toS1_precision_weighted = 0 
-
-    mapS2toS1_recall = 0 
-    mapS2toS1_recall_weighted = 0 
-
-    
-    mapS2toS2_precision = 0 
-    mapS2toS2_precision_weighted = 0 
-    
-    mapS2toS2_recall = 0 
-    mapS2toS2_recall_weighted = 0 
-    
+    mapS1toS1_weighted = 0
+    mapS1toS2_weighted = 0
+    mapS2toS1_weighted = 0
+    mapS2toS2_weighted = 0
     
     totalSize = 0 
     
@@ -334,47 +311,34 @@ def main():
             neighboursIndices = get_k_hamming_neighbours(trainedAndGeneratedS1Codes, binaryS1)  
             mapPerBatch = get_mAP(neighboursIndices,arguments.k,trainedLabels,list(labels))
             mapS1toS1 += mapPerBatch
+            mapPerBatch_Weighted = get_mAP_weighted(neighboursIndices,arguments.k,trainedLabels,list(labels))
+            mapS1toS1_weighted += mapPerBatch_Weighted
             
-            precisionBulk, recallBulk, precisionBulk_weighted, recallBulk_weighted = get_average_precision_recall(neighboursIndices, arguments.k, trainedLabels, list(labels))
-            mapS1toS1_precision += precisionBulk
-            mapS1toS1_precision_weighted += precisionBulk_weighted
-            mapS1toS1_recall += recallBulk
-            mapS1toS1_recall_weighted += recallBulk_weighted
-            
-            
+
+    
             #S1 to S2
             neighboursIndices = get_k_hamming_neighbours(trainedAndGeneratedS2Codes,binaryS1)  
             mapPerBatch = get_mAP(neighboursIndices,arguments.k,trainedLabels,list(labels))
             mapS1toS2 += mapPerBatch
-            
-            precisionBulk, recallBulk, precisionBulk_weighted, recallBulk_weighted = get_average_precision_recall(neighboursIndices, arguments.k, trainedLabels, list(labels))
-            mapS1toS2_precision += precisionBulk
-            mapS1toS2_precision_weighted += precisionBulk_weighted
-            mapS1toS2_recall += recallBulk
-            mapS1toS2_recall_weighted += recallBulk_weighted
+            mapPerBatch_weighted = get_mAP_weighted(neighboursIndices,arguments.k,trainedLabels,list(labels))
+            mapS1toS2_weighted += mapPerBatch_weighted
             
             
             #S2 to S1
             neighboursIndices = get_k_hamming_neighbours(trainedAndGeneratedS1Codes,binaryS2)  
             mapPerBatch = get_mAP(neighboursIndices,arguments.k,trainedLabels,list(labels))
-            mapS2toS1 += mapPerBatch
-            
-            precisionBulk, recallBulk, precisionBulk_weighted, recallBulk_weighted = get_average_precision_recall(neighboursIndices, arguments.k, trainedLabels, list(labels))
-            mapS2toS1_precision += precisionBulk
-            mapS2toS1_precision_weighted += precisionBulk_weighted
-            mapS2toS1_recall += recallBulk
-            mapS2toS1_recall_weighted += recallBulk_weighted
+            mapS2toS1 += mapPerBatch    
+            mapPerBatch_weighted = get_mAP_weighted(neighboursIndices,arguments.k,trainedLabels,list(labels))
+            mapS2toS1_weighted += mapPerBatch_weighted
+                  
                   
             #S2 to S2
             neighboursIndices = get_k_hamming_neighbours(trainedAndGeneratedS2Codes, binaryS2)  
             mapPerBatch = get_mAP(neighboursIndices,arguments.k,trainedLabels,list(labels))
             mapS2toS2 += mapPerBatch
-            
-            precisionBulk, recallBulk, precisionBulk_weighted, recallBulk_weighted = get_average_precision_recall(neighboursIndices, arguments.k, trainedLabels, list(labels))
-            mapS2toS2_precision += precisionBulk
-            mapS2toS2_precision_weighted += precisionBulk_weighted
-            mapS2toS2_recall += recallBulk
-            mapS2toS2_recall_weighted += recallBulk_weighted
+            mapPerBatch_weighted = get_mAP_weighted(neighboursIndices,arguments.k,trainedLabels,list(labels))
+            mapS2toS2_weighted += mapPerBatch_weighted
+
             
 
     end = time.time()
@@ -391,15 +355,7 @@ def main():
     lineWriteToFile(resultsFile_name,lineToWriteFile_list)
     
     
-    f1S1toS1,f1S1toS1_weighted = printResultsAndGetF1Scores(mapS1toS1_precision,mapS1toS1_precision_weighted,mapS1toS1_recall,mapS1toS1_recall_weighted,'S1','S1',totalSize,resultsFile_name)
-    f1S1toS2,f1S1toS2_weighted = printResultsAndGetF1Scores(mapS1toS2_precision,mapS1toS2_precision_weighted,mapS1toS2_recall,mapS1toS2_recall_weighted,'S1','S2',totalSize,resultsFile_name)
-    f1S2toS1,f1S2toS1_weighted = printResultsAndGetF1Scores(mapS2toS1_precision,mapS2toS1_precision_weighted,mapS2toS1_recall,mapS2toS1_recall_weighted,'S2','S1',totalSize,resultsFile_name)
-    f1S2toS2,f1S2toS2_weighted = printResultsAndGetF1Scores(mapS2toS2_precision,mapS2toS2_precision_weighted,mapS2toS2_recall,mapS2toS2_recall_weighted,'S2','S2',totalSize,resultsFile_name)
 
-    
-    averageF1Score = (f1S1toS1+f1S1toS2+f1S2toS1+f1S2toS2) / 4
-    averageF1Score_weighted = (f1S1toS1_weighted+f1S1toS2_weighted+f1S2toS1_weighted+f1S2toS2_weighted) / 4
-    
     
     mapS1toS1 = calculateAverageMetric(mapS1toS1,totalSize)
     mapS1toS2 = calculateAverageMetric(mapS1toS2,totalSize)
@@ -408,9 +364,14 @@ def main():
     averageMap = (mapS1toS1 + mapS1toS2 + mapS2toS1 + mapS2toS2 ) / 4 
     
     
+    mapS1toS1_weighted = calculateAverageMetric(mapS1toS1_weighted,totalSize)
+    mapS1toS2_weighted = calculateAverageMetric(mapS1toS2_weighted,totalSize)
+    mapS2toS1_weighted = calculateAverageMetric(mapS2toS1_weighted,totalSize)
+    mapS2toS2_weighted = calculateAverageMetric(mapS2toS2_weighted,totalSize)
+    averageMap_weighted = (mapS1toS1_weighted + mapS1toS2_weighted + mapS2toS1_weighted + mapS2toS2_weighted ) / 4 
     
-    print('Average F1-Score @',arguments.k,':{0}'.format(averageF1Score))
-    print('Average Weighted F1-Score @',arguments.k,':{0}'.format(averageF1Score_weighted))
+    
+
     print('# Roy mAP Calculations #')
     print('MaP for S1 to S1: ', mapS1toS1)
     print('MaP for S1 to S2: ', mapS1toS2)
@@ -418,16 +379,30 @@ def main():
     print('MaP for S2 to S2: ', mapS2toS2)
     print('Average mAP@',arguments.k,':{}'.format(averageMap))
     
+    print('# Weighted mAP Calculations #')
+    print('MaP for S1 to S1: ', mapS1toS1_weighted)
+    print('MaP for S1 to S2: ', mapS1toS2_weighted)
+    print('MaP for S2 to S1: ', mapS2toS1_weighted)
+    print('MaP for S2 to S2: ', mapS2toS2_weighted)
+    print('Average Weighted mAP@',arguments.k,':{0}'.format(averageMap_weighted))
+    
+    
+    
     
     with open(resultsFile_name, 'a') as resultsFile:
-         resultsFile.write('Average F1-Score @{}:{}\n'.format(arguments.k,averageF1Score))
-         resultsFile.write('Average Weighted F1-Score @{}:{}\n'.format(arguments.k,averageF1Score_weighted))
          resultsFile.write('# Roy mAP Calculations #\n')
          resultsFile.write("mAP S1-S1: {}\n ".format(mapS1toS1))
          resultsFile.write("mAP S1-S2: {}\n ".format(mapS1toS2))
          resultsFile.write("mAP S2-S1: {}\n ".format(mapS2toS1))
          resultsFile.write("mAP S2-S2: {}\n f".format(mapS2toS2))
          resultsFile.write("Average mAP@{}: {}\n ".format(arguments.k, averageMap))
+         
+         resultsFile.write('# Weighted mAP Calculations #\n')
+         resultsFile.write("mAP S1-S1: {}\n ".format(mapS1toS1_weighted))
+         resultsFile.write("mAP S1-S2: {}\n ".format(mapS1toS2_weighted))
+         resultsFile.write("mAP S2-S1: {}\n ".format(mapS2toS1_weighted))
+         resultsFile.write("mAP S2-S2: {}\n ".format(mapS2toS2_weighted))
+         resultsFile.write("Average mAP@{}: {}\n ".format(arguments.k, averageMap_weighted))
 
     
         

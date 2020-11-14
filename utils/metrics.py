@@ -59,6 +59,45 @@ def get_mAP(indices, nrof_neighbors,trainLabels,queryLabels):
         
     return totalMap
 
+def get_mAP_weighted(indices, nrof_neighbors,trainLabels,queryLabels):
+    
+    totalMap = 0
+    
+    for i in range(len(indices)):
+        acgAverage = np.empty((0,)).astype(np.float)
+        numberOfSharedLabels = 0
+        correct = 0
+        
+        if type(queryLabels) == list:
+            queryLabel = queryLabels[i]
+        elif type(queryLabels) == torch.Tensor:
+            queryLabel = queryLabels
+        
+        for j in range(nrof_neighbors):
+            retrievedLabel = trainLabels[indices[i][j]]
+            
+            similarity = torch.sum(torch.mul(queryLabel,retrievedLabel))
+            if similarity.ge(1.0):
+                correct += 1
+                numberOfSharedLabels = numberOfSharedLabels + similarity
+                acg = (numberOfSharedLabels / float(j+1))
+                acgAverage = np.append(acgAverage, [acg], axis=0)
+                
+                        
+        if correct == 0:
+             singularMap = 0.
+        else:
+            num = np.sum(acgAverage)
+            den = correct
+            singularMap =  num/den
+        totalMap += singularMap
+        
+    return totalMap
+
+
+
+
+
 
 def get_average_precision_recall(indices, nrof_neighbors, trainLabels, queryLabels):
     
@@ -213,26 +252,34 @@ def createTrueColorTiff(S2FolderDir,S2FolderName,destinationFileFullName):
                 dst.write_band(id, src1.read(1))
 
 
+#https://sentinel.esa.int/web/sentinel/user-guides/sentinel-1-sar/product-overview/polarimetry
 def falseRepresentationS1(S1FolderDir,S1FolderName,destinationFileFullName):
     
     polarVH = os.path.join(S1FolderDir,S1FolderName,S1FolderName+'_VH.tif')
     polarVV = os.path.join(S1FolderDir,S1FolderName,S1FolderName+'_VV.tif')
     
-    file_list = [polarVH, polarVV, polarVV ]
+    #file_list = [polarVV, polarVH, polarVV/polarVH ]
     
     # Read metadata of first file
-    with rasterio.open(file_list[0]) as src0:
+    with rasterio.open(polarVV) as src0:
         meta = src0.meta
     
     # Update meta to reflect the number of layers
-    meta.update(count = len(file_list))
+    meta.update(count = 3)
     
     # Read each layer and write it to stack
     with rasterio.open(destinationFileFullName, 'w', **meta) as dst:
-        for id, layer in enumerate(file_list, start=1):
-            with rasterio.open(layer) as src1:
-                dst.write_band(id, src1.read(1))
+        #for id, layer in enumerate(file_list, start=1):
+         #   with rasterio.open(layer) as src1:
+          #      dst.write_band(id, src1.read(1))
 
+        vhValues = rasterio.open(polarVH)
+        vvValues = rasterio.open(polarVV)
+        
+    
+        dst.write_band(1,vvValues.read(1))
+        dst.write_band(2,vhValues.read(1))
+        dst.write_band(3,vvValues.read(1) / vhValues.read(1) )
 
 
 
