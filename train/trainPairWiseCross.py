@@ -23,8 +23,8 @@ sys.path.append('../')
 
 from utils.ResNet import ResNet50_S1, ResNet50_S2
 from utils.dataGenBigEarth import dataGenBigEarthLMDB, ToTensor, Normalize, ConcatDataset
-from utils.metrics import MetricTracker, get_k_hamming_neighbours, get_mAP,get_mAP_weighted, get_average_precision_recall, timer,\
-     calculateAverageMetric,printResultsAndGetF1Scores
+from utils.metrics import MetricTracker, get_k_hamming_neighbours, get_mAP,get_mAP_weighted, timer,\
+     calculateAverageMetric
 
 
 parser = argparse.ArgumentParser(description='PyTorch multi-label Sentinel Images CBIR')
@@ -332,7 +332,7 @@ def main():
 
 
     toWrite = False
-    best_averageWeightedF1Score = 0
+    best_averageMAP = 0
     start_epoch = 0
 
     start = time.time()
@@ -350,7 +350,7 @@ def main():
 
         train(train_data_loader, modelS1,modelS2, optimizerS1,optimizerS2, epoch, train_writer,gpuDisabled,resultsFile_name)
                         
-        averageF1,val_S1codes,val_S2codes,label_val,name_valS1,name_valS2 = val(val_data_loader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer,gpuDisabled,resultsFile_name)
+        averageMAP,val_S1codes,val_S2codes,label_val,name_valS1,name_valS2 = val(val_data_loader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer,gpuDisabled,resultsFile_name)
         
         val_S1codes = torch.stack(val_S1codes).reshape(len(val_S1codes),args.bits)
         val_S2codes = torch.stack(val_S2codes).reshape(len(val_S2codes),args.bits)
@@ -359,8 +359,8 @@ def main():
 
 
 
-        is_best_acc = averageF1 > best_averageWeightedF1Score
-        best_averageWeightedF1Score = max(best_averageWeightedF1Score, averageF1)
+        is_best_acc = averageMAP > best_averageMAP
+        best_averageMAP = max(best_averageMAP, averageMAP)
         
         print('is_best_acc: ',is_best_acc)
         
@@ -392,7 +392,7 @@ def main():
             optimizerS1ToWrite = optimizerS1.state_dict()
             optimizerS2ToWrite = optimizerS2.state_dict()
 
-            bestF1ToWrite = best_averageWeightedF1Score
+            bestF1ToWrite = best_averageMAP
             toWrite = True
 
     end = time.time()
@@ -691,10 +691,6 @@ def val(valloader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer, gpuDisa
         mapS2toS2_weighted += mapPerBatch_weighted
 
 
-        
-        
-
-    
     mapS1toS1 = calculateAverageMetric(mapS1toS1,totalSize)
     mapS1toS2 = calculateAverageMetric(mapS1toS2,totalSize)
     mapS2toS1 = calculateAverageMetric(mapS2toS1,totalSize)
@@ -706,11 +702,6 @@ def val(valloader, modelS1,modelS2, optimizerS1,optimizerS2, val_writer, gpuDisa
     mapS2toS1_weighted = calculateAverageMetric(mapS2toS1_weighted,totalSize)
     mapS2toS2_weighted = calculateAverageMetric(mapS2toS2_weighted,totalSize)
     averageMap_weighted = (mapS1toS1_weighted + mapS1toS2_weighted + mapS2toS1_weighted + mapS2toS2_weighted ) / 4 
-
-
-
-
-
 
     print('# Roy mAP Calculations #')
     print('MaP for S1 to S1: ', mapS1toS1)

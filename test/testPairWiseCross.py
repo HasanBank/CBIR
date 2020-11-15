@@ -54,7 +54,7 @@ sys.path.append('../')
 
 from utils.dataGenBigEarth import dataGenBigEarthLMDB, ToTensor, Normalize, ConcatDataset
 from utils.metrics import get_mAP, get_k_hamming_neighbours,timer, get_mAP_weighted,\
-    createTrueColorTiff, falseRepresentationS1, calculateAverageMetric,lineWriteToFile,printResultsAndGetF1Scores
+    createTrueColorTiff, falseRepresentationS1, calculateAverageMetric,lineWriteToFile
 
 from utils.ResNet import ResNet50_S1, ResNet50_S2
 

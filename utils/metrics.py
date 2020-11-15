@@ -99,70 +99,6 @@ def get_mAP_weighted(indices, nrof_neighbors,trainLabels,queryLabels):
 
 
 
-def get_average_precision_recall(indices, nrof_neighbors, trainLabels, queryLabels):
-    
-    precisionTotal = np.empty((0,)).astype(np.float)
-    recallTotal = np.empty((0,)).astype(np.float)
-    
-    precisionWeightedTotal = np.empty((0,)).astype(np.float)
-    recallWeightedTotal = np.empty(0,).astype(np.float)
-    
-    for j in range(len(indices)):
-        
-        precisionPerQuery = np.empty((0,)).astype(np.float)
-        recallPerQuery = np.empty((0,)).astype(np.float)
-    
-        precisionWeightedPerQuery = np.empty((0,)).astype(np.float)
-        recallWeightedPerQuery = np.empty(0,).astype(np.float)
-        
-
-        if type(queryLabels) == list:
-            queryLabel = queryLabels[j]
-        elif type(queryLabels) == torch.Tensor:
-            queryLabel = queryLabels
-    
-    
-        for i in range(nrof_neighbors):
-        
-            retrivedImageLabel = trainLabels[indices[j][i]]
-    
-            numberOfLabels_retrived = torch.sum(retrivedImageLabel)
-            numberOfLabels_query = torch.sum(queryLabel)
-            numberOfCommonLabels = torch.sum(torch.mul(queryLabel,retrivedImageLabel))
-            
-            precisionPerInstance = numberOfCommonLabels / numberOfLabels_retrived
-            recallPerInstance = numberOfCommonLabels / numberOfLabels_query
-            
-            precisionPerQuery = np.append(precisionPerQuery, [precisionPerInstance, ], axis=0)
-            recallPerQuery = np.append(recallPerQuery, [recallPerInstance, ], axis=0)
-            
-            weightedPrecision = precisionPerInstance * (nrof_neighbors - i)
-            weightedRecall = recallPerInstance * (nrof_neighbors - i)
-            
-            precisionWeightedPerQuery = np.append(precisionWeightedPerQuery, [weightedPrecision, ], axis=0)
-            recallWeightedPerQuery = np.append(recallWeightedPerQuery, [weightedRecall, ], axis=0)
-            
-        
-        precisionPerQuery = np.sum(precisionPerQuery) / nrof_neighbors
-        recallPerQuery = np.sum(recallPerQuery) / nrof_neighbors
-
-        totalWeights = (nrof_neighbors * (nrof_neighbors + 1) ) / 2
-        precisionWeightedPerQuery = np.sum(precisionWeightedPerQuery) / totalWeights
-        recallWeightedPerQuery = np.sum(recallWeightedPerQuery) / totalWeights
-        
-        precisionTotal = np.append(precisionTotal, [precisionPerQuery, ], axis = 0)
-        recallTotal = np.append(recallTotal, [recallPerQuery, ], axis = 0)
-        precisionWeightedTotal = np.append(precisionWeightedTotal, [precisionWeightedPerQuery, ], axis = 0)
-        recallWeightedTotal = np.append(recallWeightedTotal, [recallWeightedPerQuery, ], axis = 0)
-
-  
-    return np.sum(precisionTotal), np.sum(recallTotal), np.sum(precisionWeightedTotal), np.sum(recallWeightedTotal)
-
-    
-
-def f1Score(precision,recall):
-    return 2 * (precision * recall ) / ( precision + recall)
-
 def calculateAverageMetric(sumMetric,totalSize):
     return sumMetric / totalSize * 100
 
@@ -172,40 +108,6 @@ def lineWriteToFile(fileName,lines):
             file.write(line)
         
 
-
-def printResultsAndGetF1Scores(precision,precision_weighted,recall,recall_weighted,fromDataset,targetDataset,totalSize,resultsFile_name):
-    
-    precision = calculateAverageMetric(precision,totalSize)
-    recall = calculateAverageMetric(recall,totalSize)
-    precision_weighted = calculateAverageMetric(precision_weighted,totalSize)
-    recall_weighted = calculateAverageMetric(recall_weighted,totalSize)
-    
-    f1 = f1Score(precision,recall)
-    f1_weighted = f1Score(precision_weighted,recall_weighted)
-    
-    f1_string = tensorToStr(f1)
-    f1_weighted_string = tensorToStr(f1_weighted)
-    
-    
-    unweigtedMAPLine = "mAP {}-{}: {}\n ".format(fromDataset, targetDataset,tensorToStr(precision))
-    weightedMAPLine = "mAP {}-{} (weighted): {}\n ".format(fromDataset, targetDataset,tensorToStr(precision_weighted))
-    unweightedMARLine = "mAR {}-{}: {}\n ".format(fromDataset, targetDataset,tensorToStr(recall))
-    weightedMARLine = "mAR {}-{} (weighted): {}\n ".format(fromDataset, targetDataset,tensorToStr(recall_weighted))
-    unweightedF1Line = "f1 {}-{}: {}\n ".format(fromDataset, targetDataset,f1_string)
-    weightedF1Line = 'f1 {}-{} (weighted): {}\n '.format(fromDataset, targetDataset,f1_weighted_string )
-    
-    lineWriteToFile(resultsFile_name,unweigtedMAPLine)
-    lineWriteToFile(resultsFile_name,weightedMAPLine)
-    lineWriteToFile(resultsFile_name,unweightedMARLine)
-    lineWriteToFile(resultsFile_name,weightedMARLine)
-    lineWriteToFile(resultsFile_name,unweightedF1Line)
-    lineWriteToFile(resultsFile_name,weightedF1Line)
-
-
-    print(unweightedF1Line)
-    print(weightedF1Line)
-
-    return (f1,f1_weighted)
 
 def tensorToStr(tensor):
     if torch.cuda.is_available():
