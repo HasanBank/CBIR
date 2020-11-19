@@ -1,4 +1,6 @@
 This project has been created in the scope of my master thesis in computer science, TU Berlin.
+The proposal of the master thesis is in the [https://github.com/zazazingo/CBIR/blob/master/Proposal.pdf].
+Introduction, problem statement, and thesis approach have been given in the proposal. The thesis will be shared here after submitted for the final grade.
 
 # Generation of Training/Test/Validation Splits
 After dowloading the Sentinel-1 and Sentinel-2 images, they need to be prepared to use in train,validation and test steps. `prep_splits.py` in Sentinel-1 and Sentinel-2 folders are responsible to generate consumable data files(LMDB files) whcih are suitable to use with PyTorch. Suggested splits for Sentinel-1 and Sentinel-2 Patches can be found under `splits` folders. 
